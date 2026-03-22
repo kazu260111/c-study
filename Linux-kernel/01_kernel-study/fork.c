@@ -85,7 +85,7 @@ int main(void) {
 	/*>>> forkが失敗したとき <<<*/ 
        	/* forkは失敗したとき戻り値-1を返す */
 	if (pid < 0) {
-		perror("forkの実行に失敗しました。");
+		perror("forkの実行に失敗しました。");  /* perrorはコマンド失敗後にできるだけ早く呼ぶ */
 		return 1;
 	}
 
