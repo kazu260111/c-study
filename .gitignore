@@ -4,3 +4,6 @@
 *.so
 *.out
 *.o
+__pycache__/
+*.pyc
+
