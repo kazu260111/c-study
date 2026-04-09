@@ -1,19 +1,14 @@
-/*
- * 現在編集中
- * ほぼ前バージョンのコピペ
- *
- */
-
-
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>  /* strcmp用 */
-
+#include <strings.h>  /* strcasecmp用 */
 /*
- * --- 改善版 ---
+ * === 改善版 ===
  * 登録した家族情報を閲覧できるプログラム2
  * Alice, Bob, Chris, Pole, Polaの家族の情報と関係性をユーザの入力で調べることができる
  */
+
+#define MAX_SIBLING 5  /*--- 最大きょうだい数を変えたい場合ここを変える ---*/
 
 struct Family {
 	char name[128];
@@ -22,9 +17,9 @@ struct Family {
 	bool is_female;  /* 女性なら1 */
 	struct Family *father;  /* 父親 */
 	struct Family *mother;  /* 母親 */
-	struct Family *partner;  /* 配偶者 */
-	struct Family *sibling_1;  /* きょうだい */
-	struct Family *sibling_2;  /* きょうだい（二人目）*/
+	struct Family *partner;  /* 配偶者 */	
+	/*=== 変更点 ===*/
+	struct Family *sibling[MAX_SIBLING];  /* きょうだいを配列にすることで人数の制限を簡単に増やせるようにした */
 	char preference[256];  /* 好きなもの */
 };
 
@@ -60,15 +55,17 @@ void print_status(struct Family *family_mem) {
 	if (family_mem->partner != NULL) {
 		printf("配偶者：%s\n", family_mem->partner->name);
 	}
-
-	/* きょうだいの表示(最大二人) */
-	if (family_mem->sibling_1 != NULL) {
-		printf("きょうだい：%s\n", family_mem->sibling_1->name);
+	
+	/* きょうだいの表示 */
+	/*=== 変更点 ===*/
+	/* きょうだいを配列にしたのでforループで順に表示するようにした */
+	for (int i = 0; (i < MAX_SIBLING) && (family_mem->sibling[i] != NULL); ++i) {  
+		/* メモ：構造体の変数のメンバは定義されないときNULLに初期化される */
+		/* 先に i < MAX_SIBLING を評価することでsiblingの配列外を評価しないようにする */
+		printf("きょうだい：%s\n", family_mem->sibling[i]->name);
 	}
-	if (family_mem->sibling_2 != NULL) {
-		printf("きょうだい：%s\n", family_mem->sibling_2->name);
-	}
-
+	/* 注意：sibling配列は途中でNULLがあるとその後の人が読めないので、きょうだいを編集するときは小さい方に詰める */
+	
 	/* 好きなものの表示 */
 	if (family_mem->preference[0] != '\0') {  /* 好きなものが入力されているなら(空文字でないなら) */
 		printf("好きなもの：%s\n", family_mem->preference);
@@ -84,23 +81,40 @@ void print_status(struct Family *family_mem) {
 
 int main(void) {
 /*>>> 変数の定義 <<<*/
+	/*=== 変更点 ===*/
+	/* きょうだいを配列にしたので該当部分を配列{}にした */
 	/* 両親から定義する */
-	struct Family pole = {"Pole", 45, 1, 0, NULL, NULL, NULL, NULL, NULL, "ペンギン"};  /* 配偶者はまだ定義されていないのであとで代入する */
-	struct Family pola = {"Pola", 40, 0, 1, NULL, NULL, &pole, NULL, NULL, "絵画"};
+	struct Family pole = {"Pole", 45, 1, 0, NULL, NULL, NULL, {NULL}, "ペンギン"};  /* 配偶者はまだ定義されていないのであとで代入する */
+	struct Family pola = {"Pola", 40, 0, 1, NULL, NULL, &pole, {NULL}, "絵画"};
 	pole.partner = &pola;
-      	/* ここまでで両親の入力が完了 */ 
 
 	/* 子供の定義 */
-	struct Family alice = {"Alice", 15, 0, 1, &pole, &pola, NULL, NULL, NULL, "りんご"};  /* きょうだいはまだ定義されていないのであとで代入する(二人入れる) */
-        struct Family bob = {"Bob", 12, 1, 0, &pole, &pola, NULL, &alice, NULL, "野球"}; 	/* きょうだいはまだ定義されていないのであとで代入する（ひとり入れる）*/
-        struct Family chris = {"Chris", 10, 1, 0, &pole, &pola, NULL, &alice, &bob, "チョコレート"};
-	alice.sibling_1 = &bob;
-	alice.sibling_2 = &chris;
-	bob.sibling_2 = &chris;
-	/* ここまでで子供の定義が完了 */
+	struct Family alice = {"Alice", 15, 0, 1, &pole, &pola, NULL, {NULL}, "りんご"};  /* きょうだいはまだ定義されていないのであとで代入する(二人入れる) */
+        struct Family bob = {"Bob", 12, 1, 0, &pole, &pola, NULL, {NULL}, "野球"}; 	/* きょうだいはまだ定義されていないのであとで代入する（ひとり入れる）*/
+        struct Family chris = {"Chris", 10, 1, 0, &pole, &pola, NULL, {NULL}, "チョコレート"};
+	
+	/*=== 変更点 ===*/
+	/* 子供のきょうだいは初期化時には全員NULLにして、あとからきょうだいを全員入力することにした */
+	alice.sibling[0] = &bob;
+	alice.sibling[1] = &chris;
 
-	while (1) {  /* 連続して情報を確認できるようループしている。通常終了する場合はbreakをする */
+	bob.sibling[0] = &alice;
+	bob.sibling[1] = &chris;
 
+	chris.sibling[0] = &alice;
+	chris.sibling[1] = &bob;
+
+	/*--- 1.家族を追加したい場合ここに追加 (1/2) ---*/
+
+
+	/*=== 変更点 ===*/
+	/* ポインタの配列 */
+	struct Family *families[] = {&alice, &bob, &chris, &pole, &pola};  /*--- 2.家族を追加したい場合はこの配列に追加 (2/2) ---*/
+	/* 家族の人数を自動計算 */
+	int family_count = sizeof(families) / sizeof(families[0]);
+	
+	/* 連続して情報を確認できるようwhileループしている。通常終了する場合はbreakをする */
+	while (1) { 
 /*>>> 変数の初期化 <<<*/
 		/* ループするので毎回使う変数をリセットしておく */
 		char line[128] = {0};  /* ユーザ入力受付用 */
@@ -109,14 +123,12 @@ int main(void) {
 
 /*>>> プロンプトと入力受付 <<<*/
 		printf("誰の情報を確認しますか？\n");
-		printf("1) Alice\n"
-			"2) Bob\n"
-			"3) Chris\n"
-			"4) Pole\n"
-			"5) Pola\n"
-			"q) やめる\n"
-		      );
-		
+		/*=== 変更点 ===*/
+		/* forループを使うことで家族が増えても対応できるようにした */
+		for (int i = 0; i < family_count; ++i) {
+			printf("%d) %s\n", i + 1, families[i]->name);
+		}
+		printf("q) やめる\n");		
 		
 		/* 入力がなかった場合終了する */
 		if (fgets(line, sizeof(line), stdin) == NULL) {
@@ -145,6 +157,41 @@ int main(void) {
 		 * 文字が入力されたならcmdにその文字列が入っている。
 		 */
 
+/*=== 変更点 ===*/
+/*>>> ユーザ入力に対応する家族情報を検索する <<<*/
+		/* forループにすることで、家族が増えたときもルーチンを変えずに済むようにする */
+		bool found = false;  /* メモ：stdboolをインクルードしているとtrue,falseが使える(True, Falseのように大文字にしない) */
+		for (int i = 0; i < family_count; ++i) {
+			if (family_num == i + 1 || strcasecmp(cmd, families[i]->name) == 0) {
+				print_status(families[i]);
+				found = true;
+				break;
+			}
+		}
+		/* 配列にそのままユーザ入力を入れると危険なのでforループで家族情報を検索する形になった */
+
+		/* 情報が見つからなかったとき */
+		if (!found) {
+			printf("情報が見つかりませんでした。入力をやり直してください。\n");
+			continue;  /* whileループの最初に戻る */
+		}
+	}  /* whileループの終わり */
+	return 0;
+}
+
+/*
+ * 今後の予定：
+ * 次回はユーザが自由に家族（メンバー）を追加できるプログラムを作成したい。
+ * 起動時にはファイルからメンバーを読み込むことで、普通のアプリケーションのようにメンバーを編集できるようにする予定。
+ */
+
+
+/* 
+ * 参考：
+ * 以下は前バージョンで使っていたルーチンの一部
+ * forループに比べると非常に冗長な上、家族が増えたときの作業量が多い。
+ */
+#if 0
 /*>>> 関数の実行による家族情報表示 <<<*/
 		/* family_numによって引数を変えて関数を実行する */
 		if (family_num == 1 || strcmp(cmd, "Alice") == 0 || strcmp(cmd, "alice") == 0) {
@@ -169,10 +216,4 @@ int main(void) {
 	}
 	return 0;
 }
-
-/*
- * メモ：
- * 今回は自力で作成したが、次回は調べた情報を元にポインタ配列を使って洗練されたバージョンを作成する予定
- *
- */
-
+#endif
