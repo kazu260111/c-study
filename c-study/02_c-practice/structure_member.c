@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
-#include <string.h>  /* strcmp用 */
-#include <strings.h>  /* strcasecmp用 */
+#include <string.h>
+#include <strings.h>
 
 #define MAX_MEMBER 100  /*--- メンバーの最大人数を変えたい場合ここを変える ---*/
 
@@ -12,8 +12,7 @@
  * 会員情報の登録・編集・削除・閲覧が可能。
  * 会員情報をファイルに保存して起動時に自動で読み込む。
  * 退会（削除）された会員はそのまま退会済みの会員としてファイルに残る。
- * 個人情報削除依頼があった場合、氏名を伏せ字にして備考を削除する。
- * 個人情報削除コマンドを「削除」プログラムに実装予定。
+ * 退会した会員は氏名を伏せ字にして備考を削除する。
  * 新規会員の会員番号はファイルに存在する最後尾の会員番号に+1して登録する。
  *
  * 登録情報：
@@ -67,6 +66,38 @@ void load_func() {
 	/* ファイルの読み出し */
 	/*===== 編集中 =====*/	
 
+}
+/*>>> 会員情報登録時の未入力チェック関数 <<<*/
+
+/*
+ * グローバル変数lineにユーザ入力を入れることに注意
+ */
+
+int regi_cancel_func() {
+	memset(line, 0, sizeof(line));  /* lineを0で初期化 */
+	if (fgets(line, sizeof(line), stdin) == NULL || line[0] == '\n') {
+		printf("登録を中断します。\n");
+		return -1;
+	}
+	return 0;
+}	
+
+/*>>> 会員情報登録時の数字読み取り用関数 <<<*/
+
+/*
+ * regi_cancel_funcのあとなど、fgetsでグローバル変数lineにユーザ入力を入れてから使用する
+ */
+
+int regi_read_num(int *out_num) {
+	/* 数字が読み取れなかった場合 */
+	if (sscanf(line, " %d", out_num) != 1) { 
+		printf("入力が読み取れませんでした。やり直してください。\n");
+		return -1;
+	}
+	return 0;
+}
+
+
 /*>>> 会員情報登録関数 <<<*/
 void regi_func() {
 
@@ -90,14 +121,13 @@ void regi_func() {
 	/*>>> 1.名前の入力 <<<*/
 	while (1) {
 		printf("1.名前を入力してください。\n");	
+
 		/* 名前の入力がない場合 */
-		memset(line, 0, sizeof(line));  /* lineを0で初期化 */
-		if (fgets(line, sizeof(line), stdin) == NULL || line[0] == '\n') {
-			printf("登録を中断します。\n");
+		if (regi_cancel_func() == -1) {
 			return;  /* メニューに戻る */
 		}
 		/* 文字列が読み取れなかった場合 */
-		if (sscanf(line, " %s", new_name) == NULL) {
+		if (sscanf(line, " %s", new_name) != 1) {  /* グローバル変数lineにはregi_cancel_funcでユーザ入力が入っている */
 			printf("入力が読み取れませんでした。やり直してください。\n");
 			continue;
 		}
@@ -108,16 +138,15 @@ void regi_func() {
 	/*>>> 2.クラスの入力 <<<*/
 	while (1) {
 		printf("2.クラスを入力してください。(1~5級)\n");
-		memset(line, 0, sizeof(line));  /* lineを0で初期化 */
-		if (fgets(line, sizeof(line), stdin) == NULL || line[0] == '\n') {
-			printf("登録を中断します。\n");
+		/* 入力がなかったとき */
+		if (regi_cancel_func() == -1) {
 			return;
-		
+		}
 		/* 数字が読み取れなかった場合 */
-		if (sscanf(line, " %d", new_class) == NULL) {
-			printf("入力が読み取れませんでした。やり直してください。\n");
+		if (regi_read_num(&new_class) == -1) {	
 			continue;
 		}
+		
 		/* 数字がクラスの範囲外のとき */
 		if (new_class < 1 || new_class > 5) {
 			printf("クラスは1~5級までです。やり直してください。\n");
@@ -130,14 +159,12 @@ void regi_func() {
 	/*>>> 3.年齢の入力 <<<*/
 	while (1) {
 		printf("3.年齢を入力してください。\n");
-		memset(line, 0, sizeof(line));  /* lineを0で初期化 */
-		if (fgets(line, sizeof(line), stdin) == NULL || line[0] == '\n') {
-			printf("登録を中断します。\n");
+		/* 入力がなかったとき */
+		if (regi_cancel_func() == -1) {
 			return;
 		}
 		/* 数字が読み取れなかった場合 */
-		if (sscanf(line, " %d", new_age) == NULL) {
-			printf("入力が読み取れませんでした。やり直してください。\n");
+		if (regi_read_num(&new_age) == -1) {	
 			continue;
 		}
 		printf("年齢：%d\n", new_age);
@@ -151,35 +178,34 @@ void regi_func() {
 	      		"2) 女性\n"
 			"3) その他\n"
 		      );
-		memset(line, 0, sizeof(line));  /* lineを0で初期化 */
-		if (fgets(line, sizeof(line), stdin) == NULL || line[0] == '\n') {
-			printf("登録を中断します。\n");
+		/* 入力がなかったとき */
+		if (regi_cancel_func() == -1) {
 			return;
 		}
 		/* 数字が読み取れなかった場合 */
-		if (sscanf(line, " %d", new_gender) == NULL) {
-			printf("入力が読み取れませんでした。やり直してください。\n");
+		if (regi_read_num(&new_gender) == -1) {	
 			continue;
 		}
+
 		/*>>> 性別フラグの操作 <<<*/
 		/* 男性のとき */
 		if (new_gender == 1) {  
-			new_is_male == 1;
-			new_is_famale == 0;
+			new_is_male = 1;
+			new_is_famale = 0;
 			printf("性別：男性\n");
 			break;
 		}
 		/* 女性のとき */
 		else if (new_gender == 2) {
-			new_is_male == 0;
-			new_is_female == 1;
+			new_is_male = 0;
+			new_is_female = 1;
 			printf("性別：女性\n");
 			break;
 		}
 		/* その他の性別のとき */
 		else if (new_gender == 3) {
-			new_is_male == 0;
-			new_is_female == 0;
+			new_is_male = 0;
+			new_is_female = 0;
 			printf("性別：その他\n");
 			break;
 		}
@@ -196,7 +222,7 @@ void regi_func() {
 			printf("備考を入力せずに次に進みます。\n");
 			break;			
 		}
-		printf("備考：%s\n", new_note);
+		printf("備考：%s", new_note);
 		break;
 	}
 
@@ -220,7 +246,7 @@ void regi_func() {
 			printf("性別：その他\n");
 		}
 		/* 備考を表示 */
-		printf("備考：%s");  /* 備考入力で改行が入っているので\nは不要 */
+		printf("備考：%s", new_note);  /* 備考入力で改行が入っているので\nは不要 */
 		
 		/*>>> 新規会員情報登録の決定 <<<*/
 		memset(line, 0, sizeof(line));
@@ -250,7 +276,7 @@ void regi_func() {
 /*>>> 会員情報を編集する関数 <<<*/
 void edit_func() {
 	printf("会員情報編集プログラムを起動します。\n");
-	print("誰の情報を編集しますか？\n");
+	printf("誰の情報を編集しますか？\n");
 	/* 現在退会していない会員番号と名前をforループで表示する */
 	/*===== 編集中 =====*/
 }
@@ -264,7 +290,7 @@ void dele_func() {
 
 	printf("~さんを退会させます。再入会する場合は新規登録が必要になります。よろしいですか？\n");  /*===== 変数で~を置き換える =====*/
 	/* ユーザ入力と入力検証 */
-	/* 退会する場合は名前と備考を伏せ字に置き換える */
+	/* 退会する場合は名前を伏せ字に置き換え、備考を削除する */
 	printf("退会処理が完了しました。メニューに戻ります。\n");
 	printf("退会処理を中止します。メニューに戻ります。\n");
 }
