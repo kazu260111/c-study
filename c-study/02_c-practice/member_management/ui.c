@@ -71,10 +71,36 @@ enum MenuSelectCmd menu_ui() {
 	return -1;
 }
 
-void register_ui(int status) {
+bool display_member(struct Member *head) {
+	if (head == NULL) {
+		return false;
+	}
+		
+	struct Member *current_address = head;
+	struct Member *next_address = head->next;
+	/* 最上段に項目を表示 */
+	printf("会員番号 名前 クラス 年齢 性別 備考\n"); 
+	/* 最初の一人を表示
+	printf("%d %s %d %d %s %s\n", current_address->member_num, current_address->name, current_address->class_num, current_address->age, current_address->gender, current_address->note);
+	while (next_address != NULL) {
+		current_address = current_address->next;
+		next_address = next_address->next;
+		printf("%d %s %d %d %s %s\n", current_address->member_num, current_address->name, current_address->class_num, current_address->age, current_address->gender, current_address->note);
+	}
+	return true;	
 }
 
+bool display_solo_member(struct Member *temp);
 
+enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp);
 
+enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp);
 
+enum DeleteStatus delete_ui(enum DeleteStatus status, struct Member *temp);  
+
+void view_ui(enum ViewStatus status, struct Member *head);  
+
+void quit_message_ui();  
+
+void write_file_ui(struct Member *head);
 

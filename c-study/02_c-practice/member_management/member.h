@@ -34,73 +34,123 @@ enum ReadFileStatus {
 	READ_EMPTY_FILE = 3
 };
 
+/* ファイル書き込み時使用 */
+enum WriteFileStatus {
+	WRITE_START = 0,
+	WRITE_FAILED = 1,
+	WRITE_COMPLETED = 2
+};
+
+/* search_member_address関数で使用 */
 enum SearchMemberStatus {
 	FOUND = 0,
 	NOT_FOUND = 1,
 };
 
+/* 未入力時キャンセルする場面で使用 */
 enum CancelCheck {
 	CONTINUE = 0,
 	CANCEL = 1
 };
 
-enum RegisterStep {
+/* 新規会員登録時使用 */
+enum RegisterStatus {
 	REGISTER_START = 0,
 	REGISTER_NAME = 1,
 	REGISTER_CLASS = 2,
 	REGISTER_AGE = 3,
 	REGISTER_GENDER = 4,
 	REGISTER_NOTE = 5,
-	REGISTER_CONFIRM = 6
+	REGISTER_CONFIRM = 6,
+	REGISTER_COMPLETED = 7,
+	REGISTER_ERROR_MAX_MEMBER = 8,
+        REGISTER_ERROR_UNKNOWN = 9
+};
+
+/* 会員情報編集時使用 */
+enum EditStatus {
+	EDIT_START = 0,
+	EDIT_CANCEL = 1,
+	EDIT_SELECT_MEMBER = 2,
+	EDIT_MEMBER_NOT_FOUND = 3,
+	EDIT_ITEM = 4,
+	EDIT_CONFIRM = 5,
+	EDIT_COMPLETED = 6,
+	EDIT_NO_MEMBER = 7
+};
+
+/* 会員情報削除時使用 */
+enum DeleteStatus {
+	DELETE_START = 0,
+	DELETE_CANCEL = 1,
+	DELETE_SELECT_MEMBER = 2,
+	DELETE_MEMBER_NOT_FOUND = 3,
+	DELETE_CONFIRM = 4,
+	DELETE_COMPLETED = 5,
+	DELETE_NO_MEMBER = 6
+};
+
+/* 会員情報閲覧時使用 */
+enum ViewStatus {
+	VIEW_START = 0,
+	VIEW_WAIT = 1,
+	VIEW_EXIT = 2
 };
 
 /*>>>>> 関数のプロトタイプ宣言と各ファイルの説明 <<<<<*/
-/*>>> tool.c <<<*/
+/*===== tool.c =====*/
 /* ファイル説明:
  * よく使う便利な関数をまとめている 
  */
 
 /*
  * 使い方: - ユーザの入力を引数とした配列に渡す
- * 引数: char line  - ユーザ入力を受け取りたい配列名
+ * 引数: char *line  - ユーザ入力を受け取りたい配列のポインタ
  *       int size  - 第一引数の配列の大きさ(あらかじめsizeof(line)で求めてこの引数として使用する) 
  * 戻り値: true  - ユーザ入力を配列に渡せた場合
  *         false  - ユーザ入力を配列に渡せなかった場合
  */
-bool get_cmd(char line, int size);
+bool get_cmd(char *line, int size);
 
 /*
  * 使い方: - 指定した配列に数字があれば読み取って、引数のint型ポインタに数字を渡す。
- * 引数: int *num  - 数字入力を受け取りたい変数のアドレス
+ * 引数: char *line  - ユーザ入力を受け取りたい配列のポインタ
+ *       int *cmd  - 数字入力を受け取りたい変数のアドレス
  * 戻り値: true  - 正常に数字を渡せた場合
  *         false  - 数字を渡せなかった場合
  */
-bool check_line_is_num(char line, int *cmd );
+bool check_line_is_num(char *line, int *cmd );
 
- /*
-  * 使い方:  - 第1引数の配列に文字列があれば読み取って、第2引数の配列に渡す。(入力文字列先頭の空白を削除する)
-  * 引数:  char line  - 読み取る配列の配列名
-  * 	   char cmd_line  - 読み取れた文字列を渡す配列名
-  * 戻り値: true  - 正常に文字列を渡せた場合
-  *         false  - 文字列を渡せなかった場合
-  */
-bool check_line_is_str(char line, char cmd_line);
+/*
+ * 使い方:  - 第1引数の配列に文字列があれば読み取って、第2引数の配列に渡す。(入力文字列先頭の空白を削除する)
+ * 引数: char *line  - ユーザ入力を受け取りたい配列のポインタ
+ * 	 char cmd_line  - 読み取れた文字列を渡す配列のポインタ
+ * 戻り値: true  - 正常に文字列を渡せた場合
+ *         false  - 文字列を渡せなかった場合
+ */
+bool check_line_is_str(char *line, char *cmd_line);
 
-/*>>> ui.c <<<*/
+
+/*
+ * 使い方: - fgetの後に入力バッファに入力が残っていた場合使用する。
+ * 引数: なし
+ * 戻り値: なし
+ */
+void clear_input_buffer (void);
+
+/*===== ui.c =====*/
 /* ファイル説明:
  * ユーザに表示するUIを扱う関数をまとめる
  */
 
 /*
- * void start_message_ui()
  * 使い方: - プログラム起動後に使用し、ファイル読み込み時のUIを表示する
  * 引数: なし
- * 戻り値: なし         
+ * 戻り値: なし
  */
 void start_message_ui();  
 
 /*
- * void read_file_ui(enum ReadFileStatus status, int loaded_count)  
  * 使い方: - startup_ui実行後に使用する。ファイルの読み込みに関するUIを表示する
  * 引数: enum ReadFileStatus status  - 出すメッセージを選択するためのステータスコード
  *       int loaded_count  - ファイルから読み出した人数(status=Read_SUCCESSのときのみ使用)
@@ -115,72 +165,69 @@ void read_file_ui(enum ReadFileStatus status, int loaded_count);
  */
 enum MenuSelectCmd menu_ui();
 
+
 /*
- * 使い方: - 新規会員登録画面のメッセージを表示する
- * 引数: enum RegisterStep  - 会員登録進行状況 
+ * 使い方: - すべての会員情報を表示する
+ * 引数: struct Member *head  - 会員番号1番のアドレス
+ * 戻り値: true  - 正常に表示
+ *         false  - 表示する会員情報が存在しない場合
+ */        
+bool display_member(struct Member *head);
+
+/*
+ * 使い方: - 指定した会員情報を表示する
+ * 引数: struct Member *temp  - 表示したい会員のアドレス
+ * 戻り値: true  - 正常に表示
+ *         false  - 表示する会員情報が存在しない場合
+ */        
+bool display_solo_member(struct Member *temp);
+
+/*
+ * 使い方: - 新規会員登録時に使用するUI
+ * 引数: enum RegisterStatus  - 会員登録進行状況 
  *       struct Member *temp  - 登録するデータの仮置き場のアドレス
  * 戻り値: enum CancelCheck
  */
-enum CancelCheck register_ui(enum RegisterStep, struct Member *temp);
+enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp);
 
 /*
- * void edit_ui(struct Member *head, struct Member *temp)  
- * 使い方: - メインメニューで使用し、会員情報編集画面を表示する。
- * 引数: struct Member *head  - 会員番号1番のアドレス
+ * 使い方: - 会員情報編集時に使用するUI
+ * 引数: enum EditStatus  - 会員情報編集進行状況
  *       struct Member *temp  - 編集する予定の新規会員情報を一時保存するアドレス
- * 戻り値: なし
+ * 戻り値: enum CancelCheck
  */
-void edit_ui(struct Member *head, struct Member *temp);
+enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp);
 
 /*
- * void delete_ui(struct Member *head, struct Member *temp)  
- * 使い方: - 会員情報削除画面に移動
- * 引数: struct Member *head  - 会員番号1番のアドレス
+ * 使い方: - 会員情報削除時に使用するUI
+ * 引数: enum DeleteStatus  - 会員情報編集進行状況
  *       struct Member *temp  - 削除する予定の新規会員情報を一時保存するアドレス
  * 戻り値: なし
  */
-void delete_ui(struct Member *head, struct Member *temp);  
+enum DeleteStatus delete_ui(enum DeleteStatus status, struct Member *temp);  
 
 /*
- * void view_ui(struct Member *head)  
- * 使い方: - 会員情報閲覧画面に移動
+ * 使い方: - 会員情報閲覧時に使用するUI
  * 引数: struct Member *head  - 会員番号1番のアドレス
  * 戻り値: なし
  */
-void view_ui(struct Member *head);  
+void view_ui(enum ViewStatus status, struct Member *head);  
 
 /*
- * 使い方: - プログラム終了手続きに移動
+ * 使い方: - プログラム終了時のメッセージを表示する
  * 引数: なし
  * 戻り値: なし
  */
 void quit_message_ui();  
 
 /*
- * void write_file_ui(struct Member *head)  
- * 使い方: -
- * 引数:   - 
+ * 使い方: - ファイル書き込み時に使用するUI
+ * 引数: struct Member *head  - 会員番号1番のアドレス
  * 戻り値: なし
  */
 void write_file_ui(struct Member *head);
 
-/*
- * void newfile_ui()  
- * 使い方: - セーブファイルが存在しないときに使用するUI
- * 引数:   - 
- * 戻り値: なし
- */
-void newfile_ui();
-
-/*
- * void loaded_emptyfile_ui()  
- * 使い方: - 空のファイルが見つかった場合に使用するUI
- * 引数:   - 
- * 戻り値: なし
- */
-void loaded_emptyfile_ui();
-
-/*>>> member.c <<<*/
+/*===== member.c =====*/
 /* ファイル説明:
  * 会員情報の検索、変更を行う関数をまとめる 
  */
@@ -195,6 +242,24 @@ void loaded_emptyfile_ui();
  */
 enum SearchMemberStatus search_member_address(struct Member *head, int member_num, struct Member **member_address);  
 
+
+/*
+ * 使い方: - 登録実行時に使用する
+ * 引数: struct Member *head  - 会員番号1番のアドレス
+ *       struct Member *temp  - 登録したい会員情報のアドレス
+ * 戻り値: enum RegisterStatus  - 登録進行状況
+ *         
+ */
+enum RegisterStatus register_execute(struct Member *head, struct Member *temp);
+
+/*
+ * 使い方: - 会員情報削除実行時に使用する
+ * 引数: struct Member *temp  - 削除したい会員情報のアドレス
+ * 戻り値: true  - 成功した場合
+ *         false  - 失敗した場合
+ */
+bool delete_execute(struct Member *temp);
+
 /*
  * 使い方: - プログラム終了前にすべてのメモリを解放する
  * 引数: struct member *head  - 会員番号1番のアドレス
@@ -202,7 +267,7 @@ enum SearchMemberStatus search_member_address(struct Member *head, int member_nu
  */
 void free_all_memory(struct member *head);
 
-/*>>> file_io.c <<<*/
+/*===== file_io.c =====*/
 /* ファイル説明:
  * ファイルに読み書きする関数をまとめる
  */
@@ -215,23 +280,19 @@ void free_all_memory(struct member *head);
 enum ReadFileStatus read_file(struct Member **head, int *loaded_count);
 
 /*
- * int write_file(struct Member *head )  
- * 使い方: -
- * 引数:   - 
- * 戻り値: 0 or 1  - 成功した場合0、失敗した場合1
+ * 使い方: - ファイル書き込みを実行する関数
+ * 引数: struct member *head  - 会員番号1番のアドレス
+ * 戻り値: true  - 成功した場合
+ *         false  - 失敗した場合
  */
-int write_file(struct Member *head);
+bool write_file(struct Member *head);
 
 /*
- * int is_file_empty()  
  * 使い方: - 読み込むファイルが空かどうかチェックする関数
  * 引数:   - 
- * 戻り値: 0  - 成功した場合
- *         1  - 失敗した場合
+ * 戻り値: true  - 成功した場合
+ *         false  - 失敗した場合
  */
-int is_file_empty();
-
-
- 
+bool is_file_empty();
 
 #endif
