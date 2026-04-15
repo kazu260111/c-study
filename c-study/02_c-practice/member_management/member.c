@@ -1,3 +1,8 @@
+bool register_get_new_member_num(struct Member *head, struct Member *temp) {
+
+
+}
+
 
 enum SearchMemberStatus search_member_address(struct Member *head, int member_num, struct Member **member_address);  
 int register_execute(struct Member *head, struct Member *temp);

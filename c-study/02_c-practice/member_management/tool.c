@@ -4,25 +4,25 @@
  * よく使う便利な関数をまとめたファイル。
  */
 
-get_cmd(char *line, int size) {
+bool get_cmd(char *line, int size) {
 	if (fgets(line, size, stdin) == NULL || line[0] == '\n') {
 		return false;
 	}
-	/* 入力バッファに入力が残っていたら掃除する */
+	/* 入力バッファに入力が残っていたら消す */
 	if (strchr(line, '\n') == NULL) {
 	clear_input_buffer();
 	}
 	return true;
 }
 
-check_line_is_num(char *line, int *cmd) {
+bool check_line_is_num(char *line, int *cmd) {
 	if (sscanf(line, " %d", cmd) != 1) { 
 		return false;
 	}
 	return true;
 }
 
-check_line_is_str(char *line, char *cmd_line) {
+bool check_line_is_str(char *line, char *cmd_line) {
 	if (sscanf(line, " %s", cmd_line) != 1) {
 	       return false;
 	}

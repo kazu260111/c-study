@@ -1,10 +1,3 @@
-#include <stdio.h>
-#include <stdbool.h>
-#include <string.h>
-#include <strings.h>
-
-#define MAX_MEMBER 100  /*--- メンバーの最大人数を変えたい場合ここを変える ---*/
-
 /*
  * === 登録した会員情報(スイミングスクール)を閲覧できるプログラム ===
  * 
@@ -34,7 +27,7 @@ int main() {
 	read_file_ui(READ_START, 0);
 	struct Member *head = NULL;
 	int loaded_count = 0;
-	/* head(会員番号1番のアドレス)を得る(headはこれ以降変わらない) */
+	/* head(会員番号1番のアドレス)を得る(headはNULLでなければこれ以降変わらない) */
 	/* 会員番号1番が存在しない場合、head == NULL */
 	read_file_ui(read_file(&head, &loaded_count), loaded_count);
 	while (1) {
@@ -49,6 +42,11 @@ int main() {
 		/*>>> 新規会員登録 <<<*/
 		if (cmd == SELECT_REGISTER) {
 			register_ui(REGISTER_START, 0);
+			/* 新規会員の会員番号をtemp.member_numに入れる */
+			if (register_get_new_member_num(head, &temp) == false) {
+				register_ui(REGISTER_ERROR_MAX_MEMBER, 0);
+				continue;
+			}
 			if (register_ui(REGISTER_NAME, &temp) == CANCEL) {
 				continue;
 			}
@@ -68,11 +66,7 @@ int main() {
 			}
 			/* 会員登録処理を実行 */
 			enum RegisterStatus exe_status = register_execute(head, &temp)
-			if (exe_status == REGISTER_ERROR_MAX_MEMBER) {
-				register_ui(REGISTER_ERROR_MAX_MEMBER, 0);
-				continue;
-			}
-			else if (exe_status == REGISTER_ERROR_UNKNOWN) {
+			if (exe_status == REGISTER_ERROR_UNKNOWN) {
 				regiseter_ui(REGISTER_ERROR_UNKNOWN, 0);
 				continue;
 			}
@@ -100,10 +94,17 @@ int main() {
 		 * 編集終了後、ファイルに書き込みを行う。
 		 */
 		else if (cmd == SELECT_EDIT) {
-			if (edit_ui(EDIT_START, 0) == EDIT_NO_MEMBER) {
-				edit_ui(EDIT_NO_MEMBER, 0)
+			if (head == NULL) {
+				edit_ui(EDIT_NO_MEMBER, 0);
+				continue;
 			}
-			display_member(head);
+			edit_ui(EDIT_START, 0);
+			/* 入会中の会員が存在しない（全員退会済みのとき） */
+			if (display_member(head) == NOT_FOUND) {
+				edit_ui(EDIT_NO_MEMBER, 0);
+				continue;
+			}
+				
 			/* temp.member_num に会員番号を渡す */
 			if (edit_ui(EDIT_SELECT_MEMBER, &temp) == CANCEL) {
 				edit_ui(EDIT_CANCEL, 0);
@@ -117,8 +118,8 @@ int main() {
 			}
 			/* tempに編集予定の会員情報をコピー */
 			temp = *member_address;
-			display_solo_member(&temp);
-			edit_ui(EDIT_ITEM, &temp);  /* 編集項目を選んでtempに入れる */
+		        /* 編集項目を選んでtempに入れる */
+			edit_ui(EDIT_ITEM, &temp);
 			if (edit_ui(EDIT_CONFIRM, 0) == CANCEL) {
 				edit_ui(EDIT_CANCEL, 0);
 				continue;
@@ -142,10 +143,16 @@ int main() {
 		 * その後ファイルに書き込みを行う。 
 		 */
 		else if (cmd == SELECT_DELETE) {
-			if (edit_ui(DELETE_START, 0) == DELETE_NO_MEMBER) {
-				edit_ui(DELETE_NO_MEMBER, 0)
+			if (head == NULL) {
+				edit_ui(DELETE_NO_MEMBER, 0);
+				continue;
 			}
-			display_member(head);
+			edit_ui(DELETE_START, 0);
+			/*  表示できる会員がいない場合、メッセージを出してメニューに戻る 			    （全ての会員が退会している場合）*/
+			if (display_member(head) == NOT_FOUND) {
+				edit_ui(DELETE_NO_MEMBER, 0);
+				continue;
+			}
 			/* temp.member_num に会員番号を渡す */
 			if (delete_ui(DELETE_SELECT_MEMBER, &temp) == CANCEL) {
 				delete_ui(DELETE_CANCEL, 0);
@@ -153,13 +160,13 @@ int main() {
 			}
 			/* tempに選択した会員情報のアドレスを渡す */
 			if (search_member_address(head, temp.member_num, &temp) == NOT_FOUND) {
-				delete_ui(DELETE_MEMBER_NOT_FOUND);
+				delete_ui(DELETE_MEMBER_NOT_FOUND, 0);
 				continue;
 			}
-			display_solo_member(&temp);
 			if (delete_ui(DELETE_CONFIRM, &temp) == CANCEL) {
 				delete_ui(DELETE_CANCEL, 0);
 			}
+			/* 会員情報の名前を伏せ字に置き換え、備考を削除 */
 			delete_execute(&temp);
 			delete_ui(DELETE_COMPLETED, 0);
 			/* ファイル書き込み */
