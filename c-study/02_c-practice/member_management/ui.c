@@ -13,17 +13,23 @@ void read_file_ui(enum ReadFileStatus status, int loaded_count) {
 		case READ_START:
 			printf("セーブファイルの読み込みを開始します。\n");
 			break;
-		case READ_SUCCESS:
+		case READ_SUCCESSED:
 			printf("セーブファイルの読み込みが完了しました。\n"
 			"全部で%d件のデータが見つかりました。\n", loaded_count);
 			break;
-		case READ_FAIL:
+		case READ_FAILED:
 			printf("セーブファイルが見つかりませんでした。\n"
 				"初回の新規会員登録時に自動的にセーブファイルが作成されます。\n");
 			break;
 		case READ_EMPTY_FILE:
-			printf("空のセーブファイルが見つかりました。");
+			printf("空のセーブファイルが見つかりました。\n");
 			break;
+		case READ_ERROR_MEMORY:
+			printf("メモリエラーが発生しました。データ消失を回避するためにプログラムを終了します。\n");
+			exit 1;
+		case READ_ERROR_ABNORMAL_DATA:
+			printf("異常なデータが検出されました。プログラムを終了します。\n");
+			exit 1;
 	}
 	return;
 }
@@ -89,7 +95,14 @@ enum SearchMemberStatus display_member(struct Member *head) {
 		current_address = current_address->next;
 		next_address = next_address->next;
 		if (current_address->is_deleted_account == IS_ACTIVE) {
-			printf("%d %s %d %d %s %s\n", current_address->member_num, current_address->name, current_address->class_num, current_address->age, current_address->gender, current_address->note);
+			printf("%d %s %d %d %s %s\n",
+				current_address->member_num,
+			       	current_address->name,
+			       	current_address->class_num, 
+				current_address->age, 
+				current_address->gender, 
+				current_address->note
+				);
 			++display_count;
 		}
 	}
@@ -100,7 +113,23 @@ enum SearchMemberStatus display_member(struct Member *head) {
 	return FOUND;	
 }
 
-enum SearchMemberStatus display_solo_member(struct Member *temp);
+enum SearchMemberStatus display_solo_member(struct Member *temp) {
+		if (temp->is_deleted_account == IS_ACTIVE) {
+			printf("%d %s %d %d %s %s\n",
+				temp->member_num,
+			       	temp->name,
+			       	temp->class_num, 
+				temp->age, 
+				temp->gender, 
+				temp->note
+				);
+			return FOUND;
+		}
+		else {
+			return IS_DELETED;
+		}
+}
+	
 
 enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 	switch (status) {
@@ -251,6 +280,9 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 		case REGISTER_ERROR_UNKNOWN:
 			printf("不明なエラーが発生しました。メニューに戻ります。\n");
 			return CANCEL;
+		case REGISTER_ERROR_MEMORY:
+			printf("メモリエラーが発生しました。メニューに戻ります。\n");
+			return CANCEL;
 	}
 	return CONTINUE;
 }
@@ -283,7 +315,9 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 				return CONTINUE;
 			}
 			return CONTINUE;
-
+		case EDIT_MEMBER_IS_DELETED:
+			printf("選択した会員はすでに退会済みです。メニューに戻ります。\n");
+			return CANCEL;
 		case EDIT_ITEM:
 			while (1) {
 				display_solo_member(temp);
@@ -328,7 +362,7 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 						continue;
 					}
 					char cmd_line[128] = {0};
-					if (check_line_is_num(line, cmd_line) == false) {
+					if (check_line_is_str(line, cmd_line) == false) {
 						 printf("文字が読み取れませんでした。やり直してください。\n");
 				    		continue;
 							}
@@ -450,6 +484,9 @@ enum CancelCheck delete_ui(enum DeleteStatus status, struct Member *temp) {
 		case DELETE_COMPLETED:
 			printf("会員情報の削除が完了しました。ファイルへの書き込みを行います。\n");
 			return CONTINUE;
+		case DELETE_IS_ALREADY_DELETED:
+			printf("すでに退会済みの会員です。メニューに戻ります。\n");
+			return CANCEL;
 	}
 	return CONTINUE;
 }
@@ -473,7 +510,9 @@ void view_ui(enum ViewStatus status) {
 
 
 void quit_message_ui() {
-      printf("会員情報管理システムを終了します。")	
+      printf("会員情報管理システムを終了します。");
+      return;
+}
 
 void write_file_ui(enum WriteFileStatus status) {
 	switch (status) {

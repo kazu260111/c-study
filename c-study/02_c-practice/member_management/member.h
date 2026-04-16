@@ -18,7 +18,7 @@ struct Member {
         int class_num;  /* クラス（1~5級） */
         int age;  /* 年齢 */
         char gender[256];  /* 男性、女性、その他のいずれかの文字列を入れる */
-	enum DelitedAccount is_deleted_account;  /* IS_ACTIVE, IS_DELETED の二値 */
+	enum DelitedAccount is_deleted_account;  /* IS_ACTIVE, IS_DELETED のいずれか */
         char note[4096];  /* 備考 */
         struct Member *next;  /* 次のメンバーのアドレス(プログラム起動ごとに毎回更新される */
 };
@@ -40,9 +40,11 @@ enum DelitedAccount {
 /* ファイル読み込み時使用 */
 enum ReadFileStatus {
 	READ_START = 0,
-	READ_SUCCESS = 1,
-	READ_FAIL = 2,
-	READ_EMPTY_FILE = 3
+	READ_SUCCESSED = 1,
+	READ_FAILED = 2,
+	READ_EMPTY_FILE = 3,
+	READ_ERROR_MEMORY = 4,
+	READ_ERROR_ABNORMAL_DATA = 5
 };
 
 /* ファイル書き込み時使用 */
@@ -52,11 +54,19 @@ enum WriteFileStatus {
 	WRITE_COMPLETED = 2
 };
 
-/* search_member_address関数で使用 */
+/* search_member_address関数, display_member関数,display_solo_member関数で使用 */
 enum SearchMemberStatus {
 	FOUND = 0,
 	NOT_FOUND = 1,
+	IS_DELETED = 2
 };
+
+/* search_tail関数で使用 */
+enum SearchTailStatus {
+	SEARCHTAIL_SUCCESSED = 0,
+	SEARCHTAIL_FAILED = 1,
+	SEARCHTAIL_NO_MEMBER = 2
+}
 
 /* 未入力時キャンセルする場面で使用 */
 enum CancelCheck {
@@ -82,7 +92,9 @@ enum RegisterStatus {
 	REGISTER_CONFIRM = 6,
 	REGISTER_COMPLETED = 7,
 	REGISTER_ERROR_MAX_MEMBER = 8,
-        REGISTER_ERROR_UNKNOWN = 9
+        REGISTER_ERROR_UNKNOWN = 9,
+	REGISTER_ERROR_MEMORY = 10,
+	REGISTER_SUCCESSED = 11
 };
 
 /* 会員情報編集時使用 */
@@ -105,7 +117,8 @@ enum DeleteStatus {
 	DELETE_MEMBER_NOT_FOUND = 3,
 	DELETE_CONFIRM = 4,
 	DELETE_COMPLETED = 5,
-	DELETE_NO_MEMBER = 6
+	DELETE_NO_MEMBER = 6,
+	DELETE_IS_ALREADY_DELETED = 7
 };
 
 /* 会員情報閲覧時使用 */
@@ -133,7 +146,7 @@ bool get_cmd(char *line, int size);
 /*
  * 使い方: - 指定した配列に数字があれば読み取って、引数のint型ポインタに数字を渡す。
  * 引数: char *line  - ユーザ入力を受け取りたい配列のポインタ
- *       int *cmd  - 数字入力を受け取りたい変数のアドレス
+ *       int *cmd  - 数字入力を受け取りたい変数のポインタ
  * 戻り値: true  - 正常に数字を渡せた場合
  *         false  - 数字を渡せなかった場合
  */
@@ -142,7 +155,7 @@ bool check_line_is_num(char *line, int *cmd );
 /*
  * 使い方:  - 第1引数の配列に文字列があれば読み取って、第2引数の配列に渡す。(入力文字列先頭の空白を削除する)
  * 引数: char *line  - ユーザ入力を受け取りたい配列のポインタ
- * 	 char cmd_line  - 読み取れた文字列を渡す配列のポインタ
+ * 	 char *cmd_line  - 読み取れた文字列を渡す配列のポインタ
  * 戻り値: true  - 正常に文字列を渡せた場合
  *         false  - 文字列を渡せなかった場合
  */
@@ -150,8 +163,8 @@ bool check_line_is_str(char *line, char *cmd_line);
 
 
 /*
- * 使い方: - 第一引数の配列の一文字目（空白を除く）にyもしくはnがあればtrueかfalseを返す
- * 引数:   - 
+ * 使い方: - 第一引数の配列の一文字目を判定(y,Y,n,N,その他)してYES,NO,RETRYを返す
+ * 引数: char *cmd_line - 判定したい配列のポインタ 
  * 戻り値: enum YesNoRetry  - ユーザ入力に対する分岐に使用
  */
 enum YesNoRetry check_yes_or_no(char *cmd_line);
@@ -257,7 +270,7 @@ void write_file_ui(enum WriteFileStatus status);
 
 
 /*
- * 使い方: - 新規会員番号を得て、第2引数のtemp.member_numに代入する
+ * 使い方: - 新規会員番号を得て、第2引数のtemp->member_numに代入する
  * 引数: struct Member *head  - 会員番号1番のアドレス
  *       struct Member *temp  - 新規会員情報を一時的に保管するアドレス
  * 戻り値: true  - 新規会員番号を渡した場合
@@ -279,28 +292,30 @@ enum SearchMemberStatus search_member_address(struct Member *head, int member_nu
 
 /*
  * 使い方: - 登録実行時に使用する
- * 引数: struct Member *head  - 会員番号1番のアドレス
+ * 引数: struct Member **head  - 会員番号1番のアドレスのポインタ
  *       struct Member *temp  - 登録したい会員情報のアドレス
  * 戻り値: enum RegisterStatus  - 登録進行状況
  *         
  */
-enum RegisterStatus register_execute(struct Member *head, struct Member *temp);
+enum RegisterStatus register_execute(struct Member **head, struct Member *temp);
 
-bool malloc_new_address(struct Member *temp);
 
-bool search_tail(struct Member *head, struct Member **tail);
-
-bool add_tail_next(struct Member **tail, struct Member *temp);
-
-bool temp_to_new_address(struct Member **tail, struct Member *temp);
+/*
+ * 使い方: - 最後尾の会員のアドレスを引数に渡す
+ * 引数: struct Member *head  - 会員番号1番のアドレス
+ *       struct Member **tail  - 最後尾の会員のアドレスのポインタ 
+ * 戻り値: SEARCHTAIL_SUCCESSED  - 成功した場合
+ *         SEARCHTAIL_FAILED  - 失敗した場合
+ *         SEARCHTAIL_NO_MEMBER  - 会員が見つからなかった場合
+ */
+enum SearchTailStatus search_tail(struct Member *head, struct Member **tail);
 
 /*
  * 使い方: - 会員情報削除実行時に使用する
- * 引数: struct Member *temp  - 削除したい会員情報のアドレス
- * 戻り値: true  - 成功した場合
- *         false  - 失敗した場合
+ * 引数: struct Member *delete_member_address  - 削除したい会員情報のアドレス
+ * 戻り値: DeleteStatus
  */
-bool delete_execute(struct Member *temp);
+enum DeleteStatus delete_execute(struct Member *delete_member_address);
 
 /*
  * 使い方: - プログラム終了前にすべてのメモリを解放する
@@ -322,19 +337,11 @@ void free_all_memory(struct member *head);
 enum ReadFileStatus read_file(struct Member **head, int *loaded_count);
 
 /*
- * 使い方: - ファイル書き込みを実行する関数
+ * 使い方: - ファイル書き込みを実行する関数(tsv形式)
  * 引数: struct member *head  - 会員番号1番のアドレス
  * 戻り値: true  - 成功した場合
  *         false  - 失敗した場合
  */
 bool write_file(struct Member *head);
-
-/*
- * 使い方: - 読み込むファイルが空かどうかチェックする関数
- * 引数:   - 
- * 戻り値: true  - 成功した場合
- *         false  - 失敗した場合
- */
-bool is_file_empty();
 
 #endif

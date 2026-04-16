@@ -20,15 +20,15 @@ int main() {
 	/*>>> ファイル読み込み <<<*/
 	/*
 	 * ファイルの読み込みを試行する。
-	 * ファイルがなければ新しく作成する。
-	 * ファイルがあれば読み込み、読み込めたデータ件数を表示。
-	 * その後メニューに移動する。
+	 * ファイルがなければそのままメニューに進む(会員登録時にファイルが作成される)。
+	 * ファイルがあれば読み込み、読み込めたデータ件数を表示。 その後メニューに移動する。
 	 */
 	read_file_ui(READ_START, 0);
 	struct Member *head = NULL;
 	int loaded_count = 0;
 	/* head(会員番号1番のアドレス)を得る(headはNULLでなければこれ以降変わらない) */
 	/* 会員番号1番が存在しない場合、head == NULL */
+	/* 読み込めたデータ件数を表示 */
 	read_file_ui(read_file(&head, &loaded_count), loaded_count);
 	while (1) {
 		struct Member temp = {0};
@@ -40,160 +40,169 @@ int main() {
 		enum MenuSelectCmd cmd = menu_ui();
 
 		/*>>> 新規会員登録 <<<*/
-		if (cmd == SELECT_REGISTER) {
-			register_ui(REGISTER_START, 0);
-			/* 新規会員の会員番号をtemp.member_numに入れる */
-			if (register_get_new_member_num(head, &temp) == false) {
-				register_ui(REGISTER_ERROR_MAX_MEMBER, 0);
-				continue;
-			}
-			if (register_ui(REGISTER_NAME, &temp) == CANCEL) {
-				continue;
-			}
-			if (register_ui(REGISTER_CLASS, &temp) == CANCEL) {
-				continue;
-			}
-			if (register_ui(REGISTER_AGE, &temp) == CANCEL) {
-				continue;
-			}
-			if (register_ui(REGISTER_GENDER, &temp) == CANCEL) {
-				continue;
-			}
-			register_ui(REGISTER_NOTE, &temp);
-			display_solo_member(&temp);
-			if (register_ui(REGISTER_CONFIRM, &temp) == CANCEL) {
-				continue;
-			}
-			/* 会員登録処理を実行 */
-			enum RegisterStatus exe_status = register_execute(head, &temp)
-			if (exe_status == REGISTER_ERROR_UNKNOWN) {
-				regiseter_ui(REGISTER_ERROR_UNKNOWN, 0);
-				continue;
-			}
-			/*
-			register_execute()は以下を含む(仮のメモ)
-			malloc_new_address();
-			search_tail();
-			add_tail_next();
-			temp_to_new_address(head, &temp);
-			*/
-			register_ui(REGISTER_COMPLETED, 0);
-			/* ファイル書き込み */
-			write_file_ui(WRITE_START);
-			if (write_file(head) == false) {
-				write_file_ui(WRITE_FAILED);
-				continue;
-			}
-			
-			write_file_ui(WRITE_COMPLETED);
-			continue;
-		}
-		/*>>> 会員情報編集 <<<*/
-		/*
-		 * 入会中の全会員を表示後、ユーザの選択した会員情報を編集する。
-		 * 編集終了後、ファイルに書き込みを行う。
-		 */
-		else if (cmd == SELECT_EDIT) {
-			if (head == NULL) {
-				edit_ui(EDIT_NO_MEMBER, 0);
-				continue;
-			}
-			edit_ui(EDIT_START, 0);
-			/* 入会中の会員が存在しない（全員退会済みのとき） */
-			if (display_member(head) == NOT_FOUND) {
-				edit_ui(EDIT_NO_MEMBER, 0);
-				continue;
-			}
+		switch (cmd) {
+			case SELECT_REGISTER:
+				register_ui(REGISTER_START, 0);
+				/* 新規会員の会員番号をtemp.member_numに入れる */
+				if (register_get_new_member_num(head, &temp) == false) {
+					register_ui(REGISTER_ERROR_MAX_MEMBER, 0);
+					continue;
+				}
+				if (register_ui(REGISTER_NAME, &temp) == CANCEL) {
+					continue;
+				}
+				if (register_ui(REGISTER_CLASS, &temp) == CANCEL) {
+					continue;
+				}
+				if (register_ui(REGISTER_AGE, &temp) == CANCEL) {
+					continue;
+				}
+				if (register_ui(REGISTER_GENDER, &temp) == CANCEL) {
+					continue;
+				}
+				register_ui(REGISTER_NOTE, &temp);
+				display_solo_member(&temp);
+				if (register_ui(REGISTER_CONFIRM, &temp) == CANCEL) {
+					continue;
+				}
+				/* 会員登録処理を実行 */
+				enum RegisterStatus exe_status = register_execute(&head, &temp)
+				switch (exe_status) {
+					case REGISTER_ERROR_UNKNOWN:
+						regiseter_ui(REGISTER_ERROR_UNKNOWN, 0);
+						continue;
+					case REGISTER_ERROR_MEMORY:
+						retister_ui(REGISTER_ERROR_MEMORY, 0);
+						continue;
+				}
+				register_ui(REGISTER_COMPLETED, 0);
+				/* ファイル書き込み */
+				write_file_ui(WRITE_START);
+				if (write_file(head) == false) {
+					write_file_ui(WRITE_FAILED);
+					continue;
+				}
 				
-			/* temp.member_num に会員番号を渡す */
-			if (edit_ui(EDIT_SELECT_MEMBER, &temp) == CANCEL) {
-				edit_ui(EDIT_CANCEL, 0);
+				write_file_ui(WRITE_COMPLETED);
 				continue;
-			}
-			struct Member *member_address;
-			/* member_addressに編集する会員のアドレスを渡す */
-			if (search_member_address(head, temp.member_num, &member_address) == NOT_FOUND) {
-				edit_ui(EDIT_MEMBER_NOT_FOUND, 0);
+			
+			/*>>> 会員情報編集 <<<*/
+			/*
+			 * 入会中の全会員を表示後、ユーザの選択した会員情報を編集する。
+			 * 編集終了後、ファイルに書き込みを行う。
+			 */
+			case SELECT_EDIT:
+				if (head == NULL) {
+					edit_ui(EDIT_NO_MEMBER, 0);
+					continue;
+				}
+				edit_ui(EDIT_START, 0);
+				/* 入会中の会員が存在しない（全員退会済みのとき） */
+				if (display_member(head) == NOT_FOUND) {
+					edit_ui(EDIT_NO_MEMBER, 0);
+					continue;
+				}
+					
+				/* temp.member_num に会員番号を渡す */
+				if (edit_ui(EDIT_SELECT_MEMBER, &temp) == CANCEL) {
+					edit_ui(EDIT_CANCEL, 0);
+					continue;
+				}
+				struct Member *member_address;
+				/* member_addressに編集する会員のアドレスを渡す */
+				enum SearchMemberStatus search_status = search_member_address(head, temp.member_num, &member_address)
+				switch (search_status) {
+					case NOT_FOUND:
+						edit_ui(EDIT_MEMBER_NOT_FOUND, 0);
+						continue;
+					case IS_DELETED:
+						edit_ui(EDIT_MEMBER_IS_DELETED, 0);
+						continue;
+				}
+				/* tempに編集予定の会員情報をコピー */
+				temp = *member_address;
+			        /* 編集項目を選んでtempに入れる */
+				edit_ui(EDIT_ITEM, &temp);
+				if (edit_ui(EDIT_CONFIRM, 0) == CANCEL) {
+					edit_ui(EDIT_CANCEL, 0);
+					continue;
+				}
+				/* 編集予定の会員情報にtempをコピー(編集完了) */
+				*member_address = temp;
+				edit_ui(EDIT_COMPLETED, 0);
+				/* ファイル書き込み */
+				write_file_ui(WRITE_START);
+				if (write_file(head) == false) {
+					write_file_ui(WRITE_FAILED);
+					continue;
+				}
+				write_file_ui(WRITE_COMPLETED);
 				continue;
-			}
-			/* tempに編集予定の会員情報をコピー */
-			temp = *member_address;
-		        /* 編集項目を選んでtempに入れる */
-			edit_ui(EDIT_ITEM, &temp);
-			if (edit_ui(EDIT_CONFIRM, 0) == CANCEL) {
-				edit_ui(EDIT_CANCEL, 0);
+		
+			/*>>> 会員情報削除 <<<*/
+			/* 
+			 * 入会中の全会員を表示し、ユーザが指定した会員の削除を実行する。
+			 * 会員情報削除は該当会員の名前を伏せ字に置き換え、備考を削除する。
+			 * その後ファイルに書き込みを行う。 
+			 */
+			case SELECT_DELETE: 
+				if (head == NULL) {
+					edit_ui(DELETE_NO_MEMBER, 0);
+					continue;
+				}
+				edit_ui(DELETE_START, 0);
+				/*  表示できる会員がいない場合、メッセージを出してメニューに戻る 			  
+				   （全ての会員が退会している場合）*/
+				if (display_member(head) == NOT_FOUND) {
+					edit_ui(DELETE_NO_MEMBER, 0);
+					continue;
+				}
+				/* temp.member_num に会員番号を渡す */
+				if (delete_ui(DELETE_SELECT_MEMBER, &temp) == CANCEL) {
+					delete_ui(DELETE_CANCEL, 0);
+					continue;
+				}
+				struct Member *delete_member_address = NULL
+				/* delete_member_addressに選択した会員情報のアドレスを渡す */
+				switch (search_member_address(head, temp.member_num, &delete_member_address)) {
+					case NOT_FOUND: 
+						delete_ui(DELETE_MEMBER_NOT_FOUND, 0);
+						continue;
+					case IS_DELETED:
+						delete_ui(DELETE_IS_ALREADY_DELETED, 0);
+						continue;
+				}
+				if (delete_ui(DELETE_CONFIRM, delete_member_address) == CANCEL) {
+					delete_ui(DELETE_CANCEL, 0);
+				}
+				/* 会員情報の名前を伏せ字に置き換え、備考を削除 */
+				delete_execute(delete_member_address);
+				delete_ui(DELETE_COMPLETED, 0);
+				/* ファイル書き込み */
+				write_file_ui(WRITE_START);
+				if (write_file(head) == false) {
+					write_file_ui(WRITE_FAILED);
+					continue;
+				}
+				write_file_ui(WRITE_COMPLETED);
 				continue;
-			}
-			/* 編集予定の会員情報にtempをコピー(編集完了) */
-			*member_address = temp;
-			edit_ui(EDIT_COMPLETED, 0);
-			/* ファイル書き込み */
-			write_file_ui(WRITE_START);
-			if (write_file(head) == false) {
-				write_file_ui(WRITE_FAILED);
+		
+			/*>>> 会員情報閲覧 <<<*/
+			/* 入会中の会員情報表示後、ユーザがEnterを押すとメニューに戻る */
+			case SELECT_VIEW: 
+				view_ui(VIEW_START);
+				display_member(head);
+				view_ui(VIEW_WAIT);
+				view_ui(VIEW_EXIT);
 				continue;
-			}
-			write_file_ui(WRITE_COMPLETED);
-			continue;
-		}
-		/*>>> 会員情報削除 <<<*/
-		/* 
-		 * 入会中の全会員を表示し、ユーザが指定した会員の削除を実行する。
-		 * 会員情報削除は該当会員の名前を伏せ字に置き換え、備考を削除する。
-		 * その後ファイルに書き込みを行う。 
-		 */
-		else if (cmd == SELECT_DELETE) {
-			if (head == NULL) {
-				edit_ui(DELETE_NO_MEMBER, 0);
-				continue;
-			}
-			edit_ui(DELETE_START, 0);
-			/*  表示できる会員がいない場合、メッセージを出してメニューに戻る 			    （全ての会員が退会している場合）*/
-			if (display_member(head) == NOT_FOUND) {
-				edit_ui(DELETE_NO_MEMBER, 0);
-				continue;
-			}
-			/* temp.member_num に会員番号を渡す */
-			if (delete_ui(DELETE_SELECT_MEMBER, &temp) == CANCEL) {
-				delete_ui(DELETE_CANCEL, 0);
-				continue;
-			}
-			/* tempに選択した会員情報のアドレスを渡す */
-			if (search_member_address(head, temp.member_num, &temp) == NOT_FOUND) {
-				delete_ui(DELETE_MEMBER_NOT_FOUND, 0);
-				continue;
-			}
-			if (delete_ui(DELETE_CONFIRM, &temp) == CANCEL) {
-				delete_ui(DELETE_CANCEL, 0);
-			}
-			/* 会員情報の名前を伏せ字に置き換え、備考を削除 */
-			delete_execute(&temp);
-			delete_ui(DELETE_COMPLETED, 0);
-			/* ファイル書き込み */
-			write_file_ui(WRITE_START);
-			if (write_file(head) == false) {
-				write_file_ui(WRITE_FAILED);
-				continue;
-			}
-			write_file_ui(WRITE_COMPLETED);
-			continue;
-		}
-		/*>>> 会員情報閲覧 <<<*/
-		/* 入会中の会員情報表示後、ユーザがEnterを押すとメニューに戻る */
-		else if (cmd == SELECT_VIEW) {
-			view_ui(VIEW_START);
-			display_member(head);
-			view_ui(VIEW_WAIT);
-			view_ui(VIEW_EXIT);
-			continue;
-		}
+		
 
-		/*>>> プログラム終了 <<<*/
-		/* 全メモリを解放後にプログラムを終了 */
-		else if (cmd == SELECT_QUIT) {
-			quit_message_ui();
-			free_all_memory(head);
-			break;
+			/*>>> プログラム終了 <<<*/
+			/* 全メモリを解放後にプログラムを終了 */
+			case SELECT_QUIT:
+				quit_message_ui();
+				free_all_memory(head);
+				break;
 		}
 		continue;
 	}

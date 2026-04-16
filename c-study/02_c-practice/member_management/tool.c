@@ -35,3 +35,19 @@ void clear_input_buffer (void) {
 	}
 return;
 }
+
+enum YesNoRetry check_yes_or_no(char *cmd_line) {
+	if (cmd_line[0] == 'y' || cmd_line[0] == 'Y') {
+		return YES;
+	}
+	else if (cmd_line[0] == 'n' || cmd_line[0] == 'N') {
+		return NO;
+	}
+	else {
+		return RETRY;
+	}
+	return RETRY;
+}
+
+
+
