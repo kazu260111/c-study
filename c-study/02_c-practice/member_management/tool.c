@@ -1,3 +1,5 @@
+#include "member.h"
+
 /*===== tool.c =====*/
 /*
  * ファイル説明:
@@ -46,7 +48,6 @@ enum YesNoRetry check_yes_or_no(char *cmd_line) {
 	else {
 		return RETRY;
 	}
-	return RETRY;
 }
 
 

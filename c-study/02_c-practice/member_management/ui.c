@@ -1,6 +1,5 @@
 #include "member.h"
-#include <stdio.h>
-#include <stdbool.h>
+
 /* このファイルはユーザ向けのUIを担当する */
 
 void start_message_ui() {
@@ -12,26 +11,31 @@ void read_file_ui(enum ReadFileStatus status, int loaded_count) {
 	switch (status) {
 		case READ_START:
 			printf("セーブファイルの読み込みを開始します。\n");
-			break;
+			return;
 		case READ_SUCCESSED:
 			printf("セーブファイルの読み込みが完了しました。\n"
 			"全部で%d件のデータが見つかりました。\n", loaded_count);
-			break;
+			return;
 		case READ_FAILED:
 			printf("セーブファイルが見つかりませんでした。\n"
 				"初回の新規会員登録時に自動的にセーブファイルが作成されます。\n");
-			break;
+			return;
 		case READ_EMPTY_FILE:
 			printf("空のセーブファイルが見つかりました。\n");
-			break;
+			return;
 		case READ_ERROR_MEMORY:
 			printf("メモリエラーが発生しました。データ消失を回避するためにプログラムを終了します。\n");
-			exit 1;
+			exit(1);
 		case READ_ERROR_ABNORMAL_DATA:
 			printf("異常なデータが検出されました。プログラムを終了します。\n");
-			exit 1;
+			exit(1);
+		case READ_MAX_MEMBER:
+			printf("読み込んだデータ件数が最大に達しました。読み込みを終了します。\n");
+			return;
+		default:
+			assert(0 && "[DEBUG] read_file_uiの戻り値で問題が発生しました。");
 	}
-	return;
+	assert(0 && "[DEBUG] read_file_uiで問題が発生しました。");
 }
 
 enum MenuSelectCmd menu_ui() {
@@ -51,7 +55,7 @@ enum MenuSelectCmd menu_ui() {
 		char cmd_line[128];
 		check_line_is_str(line, cmd_line);
 		if (cmd_line[0] == 'q' || cmd_line[0] == 'Q') {
-			printf("プログラムを終了します。\n")
+			printf("プログラムを終了します。\n");
 			return SELECT_QUIT;
 			}
 		int cmd;	
@@ -72,7 +76,7 @@ enum MenuSelectCmd menu_ui() {
 				printf("数字が間違っています。やり直してください。\n");
 		}
 	}
-	return -1;
+	assert(0 && "[DEBUG] menu_uiのループで問題が発生しました。");
 }
 
 enum SearchMemberStatus display_member(struct Member *head) {
@@ -84,9 +88,9 @@ enum SearchMemberStatus display_member(struct Member *head) {
 	struct Member *current_address = head;
 	struct Member *next_address = head->next;
 	/* 最上段に項目を表示 */
-	printf("会員番号 名前 クラス 年齢 性別 備考\n"); 
+	printf("\n会員番号 名前 クラス 年齢 性別 備考\n"); 
 	/* 最初の一人を表示 */
-	if (current_address->is_deleted_account == IS_ACTIVE) {
+	if (current_address->is_deleted_account == ACCOUNT_IS_ACTIVE) {
 		printf("%d %s %d %d %s %s\n", current_address->member_num, current_address->name, current_address->class_num, current_address->age, current_address->gender, current_address->note);
 		++display_count; 
 	}
@@ -94,7 +98,7 @@ enum SearchMemberStatus display_member(struct Member *head) {
 	while (next_address != NULL) {
 		current_address = current_address->next;
 		next_address = next_address->next;
-		if (current_address->is_deleted_account == IS_ACTIVE) {
+		if (current_address->is_deleted_account == ACCOUNT_IS_ACTIVE) {
 			printf("%d %s %d %d %s %s\n",
 				current_address->member_num,
 			       	current_address->name,
@@ -114,8 +118,8 @@ enum SearchMemberStatus display_member(struct Member *head) {
 }
 
 enum SearchMemberStatus display_solo_member(struct Member *temp) {
-		if (temp->is_deleted_account == IS_ACTIVE) {
-			printf("%d %s %d %d %s %s\n",
+		if (temp->is_deleted_account == ACCOUNT_IS_ACTIVE) {
+			printf("\n%d %s %d %d %s %s\n",
 				temp->member_num,
 			       	temp->name,
 			       	temp->class_num, 
@@ -139,7 +143,7 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 			return CONTINUE;
 		case REGISTER_NAME:
 			while (1) {
-				printf("名前を入力してください。\n")
+				printf("名前を入力してください。\n");
 				char line[1024] = {0};
 				if (get_cmd(line, sizeof(line)) == false) {
 					printf("入力がありませんでした。登録を中断します。\n");
@@ -154,7 +158,7 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 			}
 		case REGISTER_CLASS:
 			while (1) {
-				printf("クラスを入力してください。(1級~%d級)\n", MAX_CLASS);
+				printf("半角数字でクラスを入力してください。(1級~%d級)\n", MAX_CLASS);
 				char line[128];
 				if (get_cmd(line, sizeof(line)) == false) {
 					printf("入力がありませんでした。登録を中断します。\n");
@@ -173,7 +177,7 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 			}
 		case REGISTER_AGE:
 			while (1) {
-				printf("年齢を入力してください。\n");
+				printf("半角数字で年齢を入力してください。\n");
 				char line[128];
 				if (get_cmd(line, sizeof(line)) == false) {
 					printf("入力がありませんでした。登録を中断します。\n");
@@ -188,7 +192,7 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 			}
 		case REGISTER_GENDER:
 			while (1) {
-				printf("性別を選択してください。\n"
+				printf("半角数字で性別を選択してください。\n"
 					"1) 男性\n"
 					"2) 女性\n"
 					"3) その他\n"
@@ -205,13 +209,13 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 				}
 				switch (cmd) {
 					case 1:
-						strcpy("男性", temp->gender);
+						strcpy(temp->gender, "男性");
 						break;
 					case 2:
-						strcpy("女性", temp->gender);
+						strcpy(temp->gender, "女性");
 						break;
 					case 3:
-						strcpy("その他", temp->gender);
+						strcpy(temp->gender, "その他");
 						break;
 					default:
 						printf("数字が間違っています。やり直してください。\n");
@@ -224,11 +228,13 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 			printf("備考を入力してください。未入力でも次に進みます。\n");	
 			char line[4096];
 			if (get_cmd(line, sizeof(line)) == false) {
-				printf("備考：なし\n\n");
+				strcpy(temp->note, "なし");
+				printf("備考：%s\n\n", temp->note);
 				return CONTINUE;
 				}
 			if (check_line_is_str(line, temp->note) == false) {
-				printf("備考：なし\n\n");
+				strcpy(temp->note, "なし");
+				printf("備考：%s\n\n", temp->note);
 				return CONTINUE;	
 				}
 			printf("備考：%s\n\n", temp->note);
@@ -245,6 +251,7 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 				temp->member_num,
 				temp->name,
 				temp->class_num,
+				temp->age,
 				temp->gender,
 				temp->note
 			      );
@@ -258,7 +265,7 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 					printf("入力が読み取れませんでした。やり直してください。\n");
 					continue;
 				}
-				enum YesNoRetry cmd = check_yes_or_no(cmd_line)
+				enum YesNoRetry cmd = check_yes_or_no(cmd_line);
 				switch (cmd) {
 					case YES:
 						printf("登録処理を実行します。\n");
@@ -283,8 +290,10 @@ enum CancelCheck register_ui(enum RegisterStatus status, struct Member *temp) {
 		case REGISTER_ERROR_MEMORY:
 			printf("メモリエラーが発生しました。メニューに戻ります。\n");
 			return CANCEL;
+		default:
+			assert(0 && "[DEBUG] register_uiの引数で問題が発生しました。");
 	}
-	return CONTINUE;
+	assert(0 && "[DEBUG] register_uiのループで問題が発生しました。");
 }
 
 enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
@@ -299,7 +308,8 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 			printf("指定の会員が見つかりません。メニューに戻ります。\n");
 			return CANCEL;
 		case EDIT_NO_MEMBER:
-			printf("編集できる会員がいません。メニューに戻ります。\n")
+			printf("編集できる会員がいません。メニューに戻ります。\n");
+			return CANCEL;
 		case EDIT_SELECT_MEMBER:
 			while (1) {
 				printf("編集したい会員の会員番号を入力してください。\n");
@@ -308,8 +318,8 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 					printf("入力がありませんでした。会員情報の編集を中止します。\n");
 					return CANCEL;
 				}
-				if (check_line_is_num(line, &temp->number) == false) {
-					prinf("数字を読み取れませんでした。やり直してください。\n");
+				if (check_line_is_num(line, &temp->member_num) == false) {
+					printf("数字を読み取れませんでした。やり直してください。\n");
 					continue;
 				}
 				return CONTINUE;
@@ -321,18 +331,24 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 		case EDIT_ITEM:
 			while (1) {
 				display_solo_member(temp);
-				printf("どの項目を編集しますか？");
+				printf(	"1) 名前  "
+					"2) クラス "
+					"3) 年齢  "
+					"4) 性別  "
+					"5) 備考\n"
+				      );
+				printf("どの項目を編集しますか？\n");
 				char line[128];
 				if (get_cmd(line, sizeof(line)) == false) {
 					printf("入力がありませんでした。会員情報の編集を中止します。\n");
 					return CANCEL;
 				}
-				int item_num
+				int item_num;
 				if (check_line_is_num(line, &item_num) == false) {
-					prinf("数字を読み取れませんでした。やり直してください。\n");
+					printf("数字を読み取れませんでした。やり直してください。\n");
 					continue;
 				}
-				switch (cmd) {
+				switch (item_num) {
 					case 1:
 						register_ui(REGISTER_NAME, temp);
 						break;
@@ -355,15 +371,16 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 
 
 			       	while (1) {
-					printf("続けて編集しますか？\n");
-					char [128] = {0};
+					display_solo_member(temp);
+					printf("続けて編集しますか？[y/n]\n");
+					char line[128] = {0};
 					if (get_cmd(line, sizeof(line)) == false) {
 						printf("入力がありませんでした。やり直してください。\n");
 						continue;
 					}
 					char cmd_line[128] = {0};
 					if (check_line_is_str(line, cmd_line) == false) {
-						 printf("文字が読み取れませんでした。やり直してください。\n");
+						 printf("入力が読み取れませんでした。やり直してください。\n");
 				    		continue;
 							}
 					switch (check_yes_or_no(cmd_line)) {
@@ -379,7 +396,7 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 				}
 				continue;
 			}
-			return CONTINUE;
+			assert(0 && "[DEBUG] edit_uiのEDIT_ITEMのループで問題が発生しました。");
 		case EDIT_CONFIRM:
 			while (1) {
 				printf(	"会員番号：%d\n"
@@ -392,6 +409,7 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 				temp->member_num,
 				temp->name,
 				temp->class_num,
+				temp->age,
 				temp->gender,
 				temp->note
 			      );
@@ -405,7 +423,7 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 					printf("入力が読み取れませんでした。やり直してください。\n");
 					continue;
 				}
-				enum YesNoRetry cmd = check_yes_or_no(cmd_line)
+				enum YesNoRetry cmd = check_yes_or_no(cmd_line);
 				switch (cmd) {
 					case YES:
 						printf("編集処理を実行します。\n");
@@ -421,8 +439,10 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 		case EDIT_COMPLETED:
 			printf("編集が完了しました。ファイルへの書き込みを行います。\n");
 			return CONTINUE;
+		default:
+			assert(0 && "[DEBUG] edit_uiの引数で問題が発生しました。");
 	}
-	return CONTINUE;
+	assert(0 && "[DEBUG] edit_uiで問題が発生しました。");
 }
 
 enum CancelCheck delete_ui(enum DeleteStatus status, struct Member *temp) {
@@ -447,8 +467,8 @@ enum CancelCheck delete_ui(enum DeleteStatus status, struct Member *temp) {
 					printf("入力がありませんでした。会員情報の削除を中止します。\n");
 					return CANCEL;
 				}
-				if (check_line_is_num(line, &temp->number) == false) {
-					prinf("数字を読み取れませんでした。やり直してください。\n");
+				if (check_line_is_num(line, &temp->member_num) == false) {
+					printf("数字を読み取れませんでした。やり直してください。\n");
 					continue;
 				}
 				return CONTINUE;
@@ -456,7 +476,7 @@ enum CancelCheck delete_ui(enum DeleteStatus status, struct Member *temp) {
 			return CONTINUE;
 		case DELETE_CONFIRM:
 			while (1) {
-				display_solo_member(&temp);
+				display_solo_member(temp);
 				printf("以上の会員を削除します。よろしいですか？[y/n]\n");
 				char line[128] = {0};
 				if (get_cmd(line, sizeof(line)) == false) {
@@ -468,7 +488,7 @@ enum CancelCheck delete_ui(enum DeleteStatus status, struct Member *temp) {
 					printf("入力が読み取れませんでした。やり直してください。\n");
 					continue;
 				}
-				enum YesNoRetry cmd = check_yes_or_no(cmd_line)
+				enum YesNoRetry cmd = check_yes_or_no(cmd_line);
 				switch (cmd) {
 					case YES:
 						printf("会員削除処理を実行します。\n");
@@ -487,8 +507,10 @@ enum CancelCheck delete_ui(enum DeleteStatus status, struct Member *temp) {
 		case DELETE_IS_ALREADY_DELETED:
 			printf("すでに退会済みの会員です。メニューに戻ります。\n");
 			return CANCEL;
+		default:
+			assert(0 && "[DEBUG] deltete_uiの引数で問題が発生しました。");
 	}
-	return CONTINUE;
+	assert(0 && "[DEBUG] delete_uiで問題が発生しました。");
 }
 
 void view_ui(enum ViewStatus status) {
@@ -504,13 +526,18 @@ void view_ui(enum ViewStatus status) {
 		case VIEW_EXIT:
 			printf("会員情報の閲覧を終了します。\n");
 			return;
+		case VIEW_NO_MEMBER:
+			printf("閲覧できる会員がいません。メニューに戻ります。\n");
+			return;
+		default:
+			assert(0 && "[DEBUG] view_uiの引数で問題が発生しました。");
 	}
-	return;
+	assert(0 && "[DEBUG] view_uiで問題が発生しました。");
 }
 
 
 void quit_message_ui() {
-      printf("会員情報管理システムを終了します。");
+      printf("会員情報管理システムを終了します。\n");
       return;
 }
 
@@ -525,6 +552,8 @@ void write_file_ui(enum WriteFileStatus status) {
 		case WRITE_COMPLETED:
 			printf("ファイルへの書き込みが完了しました。メニューに戻ります。\n");
 			break;
+		default:
+			assert(0 && "[DEBUG] write_file_uiの引数で問題が発生しました。");
 	}
 	return;
 }

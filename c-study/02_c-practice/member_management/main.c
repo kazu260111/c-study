@@ -1,3 +1,5 @@
+#include "member.h"
+
 /*
  * === 登録した会員情報(スイミングスクール)を閲覧できるプログラム ===
  * 
@@ -66,14 +68,19 @@ int main() {
 					continue;
 				}
 				/* 会員登録処理を実行 */
-				enum RegisterStatus exe_status = register_execute(&head, &temp)
+				enum RegisterStatus exe_status = register_execute(&head, &temp);
 				switch (exe_status) {
+					case REGISTER_SUCCESSED:
+						break;
 					case REGISTER_ERROR_UNKNOWN:
-						regiseter_ui(REGISTER_ERROR_UNKNOWN, 0);
+						register_ui(REGISTER_ERROR_UNKNOWN, 0);
 						continue;
 					case REGISTER_ERROR_MEMORY:
-						retister_ui(REGISTER_ERROR_MEMORY, 0);
+						register_ui(REGISTER_ERROR_MEMORY, 0);
 						continue;
+					default:
+						assert(0 && "[DEBUG] register_executeの戻り値で問題が発生しました。");
+
 				}
 				register_ui(REGISTER_COMPLETED, 0);
 				/* ファイル書き込み */
@@ -110,14 +117,17 @@ int main() {
 				}
 				struct Member *member_address;
 				/* member_addressに編集する会員のアドレスを渡す */
-				enum SearchMemberStatus search_status = search_member_address(head, temp.member_num, &member_address)
+				enum SearchMemberStatus search_status = search_member_address(head, temp.member_num, &member_address);
 				switch (search_status) {
+					case FOUND:
+						break;
 					case NOT_FOUND:
 						edit_ui(EDIT_MEMBER_NOT_FOUND, 0);
 						continue;
 					case IS_DELETED:
 						edit_ui(EDIT_MEMBER_IS_DELETED, 0);
 						continue;
+					default:
 				}
 				/* tempに編集予定の会員情報をコピー */
 				temp = *member_address;
@@ -147,14 +157,14 @@ int main() {
 			 */
 			case SELECT_DELETE: 
 				if (head == NULL) {
-					edit_ui(DELETE_NO_MEMBER, 0);
+					delete_ui(DELETE_NO_MEMBER, 0);
 					continue;
 				}
-				edit_ui(DELETE_START, 0);
+				delete_ui(DELETE_START, 0);
 				/*  表示できる会員がいない場合、メッセージを出してメニューに戻る 			  
 				   （全ての会員が退会している場合）*/
 				if (display_member(head) == NOT_FOUND) {
-					edit_ui(DELETE_NO_MEMBER, 0);
+					delete_ui(DELETE_NO_MEMBER, 0);
 					continue;
 				}
 				/* temp.member_num に会員番号を渡す */
@@ -162,15 +172,19 @@ int main() {
 					delete_ui(DELETE_CANCEL, 0);
 					continue;
 				}
-				struct Member *delete_member_address = NULL
+				struct Member *delete_member_address = NULL;
 				/* delete_member_addressに選択した会員情報のアドレスを渡す */
 				switch (search_member_address(head, temp.member_num, &delete_member_address)) {
+					case FOUND:
+						break;
 					case NOT_FOUND: 
 						delete_ui(DELETE_MEMBER_NOT_FOUND, 0);
 						continue;
 					case IS_DELETED:
 						delete_ui(DELETE_IS_ALREADY_DELETED, 0);
 						continue;
+					default:
+						assert(0 && "[DEBUG] search_member_addressの戻り値で問題が発生しました。");
 				}
 				if (delete_ui(DELETE_CONFIRM, delete_member_address) == CANCEL) {
 					delete_ui(DELETE_CANCEL, 0);
@@ -191,7 +205,10 @@ int main() {
 			/* 入会中の会員情報表示後、ユーザがEnterを押すとメニューに戻る */
 			case SELECT_VIEW: 
 				view_ui(VIEW_START);
-				display_member(head);
+				if (display_member(head) == NOT_FOUND) {
+					view_ui(VIEW_NO_MEMBER);
+					continue;
+				}
 				view_ui(VIEW_WAIT);
 				view_ui(VIEW_EXIT);
 				continue;
@@ -203,44 +220,55 @@ int main() {
 				quit_message_ui();
 				free_all_memory(head);
 				break;
+
+			default:
+				assert(0 && "[DEBUG] menu_uiの戻り値で問題が発生しました。");
 		}
-		continue;
+		break;
 	}
-	return 0;
-}
-
-
-
-
-
-
-
-	
-
-
-		
-
-	
-	
-
 	return 0;
 }
 
 /*
  * メモ：
  * 以前の経験を活かして以下の点に注意して制作することにした。
+ *
  * 1. プログラムの実装方法と全体の流れの確認
+ *
  *  - 前回はプログラムを書きながらどう実装すればいいか考えていたが、先に技術的な実装方法を決めていないと途中で必要な変数が増えたりして広範囲の修正が必要になったりした。
  *    必要な機能を考えて先に実装方法を決定し、制作途中で実装方法がころころ変わることがないようにする。
+ *  -> 実際は途中で一部のフラグをenum型にすべきだということに気づいたり、デバッグメッセージを追加したりと追加が必要なところが多かった。そのあたりは経験が重要だと思うので、次回から意識していきたい。
  *
  * 2. 必要な関数の洗い出しとヘッダファイルの作成
+ *
  *  - この過程で関数の引数と戻り値をはっきりさせ、関数を部品として使えるようにする。
  *    関数はこの段階で完成させなくても、引数と戻り値がはっきりすればよいことにした。
  *  - 関数を作るときはUI部分を担当する関数とロジック部分を担当する関数で役割を完全に分けるように気をつけた。
  *  -> 実際はmain関数を書きながらさらに改善箇所が見つかったが、関数の役割分担をしたおかげであまり混乱せずに修正することができた。
  *
  * 3. main関数で全体の流れをはっきりさせる
+ *
  *  - 関数を部品と使えるようにすれば、main関数で最後までの大まかな流れが作れる。中身が空の関数を準備してとりあえず動くようにする。
  *  - 一つの関数が完成したらとりあえずmainに入れてmakeでコンパイルし動作確認をする。作成した関数の部分が正常に動くことを確認してから次の関数に取り掛かる。
+ *  -> 実際はほとんどすべての関数を実装してからmakeでデバッグを始めていた。ロジックは難しくなかったので、いちいちコンパイルするのが面倒になってしまっていた(とりあえず完成してからエラーをLLMに投げればいいと思っていた)
+ *     また、モジュール化について理解していたので、修正するとしても前回のように全体に波及してやり直しにはならないだろうと思っていた。しかし、mainから正しい流れで関数が実行されているか確認するためにデバッグメッセージを使いながら何度もコンパイルすべきだと考え直したので、次回から気をつけたいと思う。
  * 
+ * 多かったエラー
+ *
+ * - セミコロンのつけ忘れ
+ * - 未定義のenum型変数
+ *   - わかりやすくするためにenum型にしたが、あとで定義しようとしていたら忘れた
+ * - 関数の引数の数を間違える
+ *   - 二つ引数が必要なのに一つしか必要ないときに、二つ目を書き忘れた
+ * - 一部ロジックをコピペして使いまわすときに変数の名前を変え忘れた
+ * - 単なるタイプミス
+ * 
+ * 実際にあったバグの例
+ *
+ * - 備考を未記入のままで進めると、データ書き込みのときに書き込むデータの種類が合わなくなる
+ *   - 一人につき7種のデータをファイルに書くが、備考が未記入だと備考を除いた6種類のデータしか書き込まなくなるので読み取れなくなる
+ *   -> 備考が未記入の場合"なし"と書き込むことにした
+ *
+ * - 会員登録してもそのままだと編集、削除、閲覧ができない
+ *   -> 入会時に入会フラグを立てるのを忘れていた 
  */

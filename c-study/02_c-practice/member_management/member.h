@@ -2,14 +2,22 @@
 #define MEMBER_H
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <stdbool.h>
+#include <assert.h>
 
 /* 最大クラスを変えるときはここを編集(1級~MAX_CLASS級までのクラスを設定可能) */
 #define MAX_CLASS 5
 /*--- 会員数の最大人数を変えたい場合ここを変える ---*/
 #define MAX_MEMBER 100 
+
+/* 列挙体の定義(構造体で使用するもの) */
+enum DelitedAccount {
+	ACCOUNT_IS_ACTIVE = 1,
+	ACCOUNT_IS_DELETED = 2
+};
 
 /*>>>>> 構造体の定義 <<<<<*/
 struct Member {
@@ -18,7 +26,7 @@ struct Member {
         int class_num;  /* クラス（1~5級） */
         int age;  /* 年齢 */
         char gender[256];  /* 男性、女性、その他のいずれかの文字列を入れる */
-	enum DelitedAccount is_deleted_account;  /* IS_ACTIVE, IS_DELETED のいずれか */
+	enum DelitedAccount is_deleted_account;  /* ACCOUNT_IS_ACTIVE, ACCOUNT_IS_DELETED のいずれか */
         char note[4096];  /* 備考 */
         struct Member *next;  /* 次のメンバーのアドレス(プログラム起動ごとに毎回更新される */
 };
@@ -32,10 +40,6 @@ enum MenuSelectCmd {
 	SELECT_QUIT = 5
 };
 
-enum DelitedAccount {
-	IS_ACTIVE = 1,
-	IS_DELETED = 2
-};
 
 /* ファイル読み込み時使用 */
 enum ReadFileStatus {
@@ -44,7 +48,8 @@ enum ReadFileStatus {
 	READ_FAILED = 2,
 	READ_EMPTY_FILE = 3,
 	READ_ERROR_MEMORY = 4,
-	READ_ERROR_ABNORMAL_DATA = 5
+	READ_ERROR_ABNORMAL_DATA = 5,
+	READ_MAX_MEMBER = 6
 };
 
 /* ファイル書き込み時使用 */
@@ -66,7 +71,7 @@ enum SearchTailStatus {
 	SEARCHTAIL_SUCCESSED = 0,
 	SEARCHTAIL_FAILED = 1,
 	SEARCHTAIL_NO_MEMBER = 2
-}
+};
 
 /* 未入力時キャンセルする場面で使用 */
 enum CancelCheck {
@@ -79,7 +84,7 @@ enum YesNoRetry {
 	YES = 1,
 	NO = 2,
 	RETRY = 3
-}	
+};	
 
 /* 新規会員登録時使用 */
 enum RegisterStatus {
@@ -106,7 +111,8 @@ enum EditStatus {
 	EDIT_ITEM = 4,
 	EDIT_CONFIRM = 5,
 	EDIT_COMPLETED = 6,
-	EDIT_NO_MEMBER = 7
+	EDIT_NO_MEMBER = 7,
+	EDIT_MEMBER_IS_DELETED = 8
 };
 
 /* 会員情報削除時使用 */
@@ -125,8 +131,10 @@ enum DeleteStatus {
 enum ViewStatus {
 	VIEW_START = 0,
 	VIEW_WAIT = 1,
-	VIEW_EXIT = 2
+	VIEW_EXIT = 2,
+	VIEW_NO_MEMBER = 3
 };
+
 
 /*>>>>> 関数のプロトタイプ宣言と各ファイルの説明 <<<<<*/
 /*===== tool.c =====*/
@@ -244,10 +252,10 @@ enum CancelCheck delete_ui(enum DeleteStatus status, struct Member *temp);
 
 /*
  * 使い方: - 会員情報閲覧時に使用するUI
- * 引数: struct Member *head  - 会員番号1番のアドレス
+ * 引数: struct Member *status  - メッセージの種類
  * 戻り値: なし
  */
-void view_ui(enum ViewStatus status, struct Member *head);  
+void view_ui(enum ViewStatus status);  
 
 /*
  * 使い方: - プログラム終了時のメッセージを表示する
@@ -322,7 +330,7 @@ enum DeleteStatus delete_execute(struct Member *delete_member_address);
  * 引数: struct member *head  - 会員番号1番のアドレス
  * 戻り値: なし
  */
-void free_all_memory(struct member *head);
+void free_all_memory(struct Member *head);
 
 /*===== file_io.c =====*/
 /* ファイル説明:
@@ -331,7 +339,8 @@ void free_all_memory(struct member *head);
 
 /*
  * 使い方: -
- * 引数:   - 
+ * 引数: struct member **head  - 会員番号1番のアドレスのポインタ
+ * 	 int *loaded_count  - 読み込んだデータ件数のポインタ
  * 戻り値: enum ReadFileStatus
  */
 enum ReadFileStatus read_file(struct Member **head, int *loaded_count);
