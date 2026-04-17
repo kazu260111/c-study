@@ -6,4 +6,6 @@
 *.o
 __pycache__/
 *.pyc
+member_management_system
+member.tsv
 
