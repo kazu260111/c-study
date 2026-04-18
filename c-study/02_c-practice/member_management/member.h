@@ -15,8 +15,8 @@
 
 /* 列挙体の定義(構造体で使用するもの) */
 enum DelitedAccount {
-	ACCOUNT_IS_ACTIVE = 1,
-	ACCOUNT_IS_DELETED = 2
+	ACCOUNT_IS_ACTIVE = 0,
+	ACCOUNT_IS_DELETED = 1
 };
 
 /*>>>>> 構造体の定義 <<<<<*/
@@ -33,11 +33,11 @@ struct Member {
 /*>>>>> 列挙型の定義 <<<<<*/
 /* メニューで使用 */
 enum MenuSelectCmd {
-	SELECT_REGISTER = 1,
-	SELECT_EDIT = 2,
-	SELECT_DELETE = 3,
-	SELECT_VIEW = 4,
-	SELECT_QUIT = 5
+	SELECT_REGISTER = 0,
+	SELECT_EDIT = 1,
+	SELECT_DELETE = 2,
+	SELECT_VIEW = 3,
+	SELECT_QUIT = 4
 };
 
 
@@ -81,9 +81,9 @@ enum CancelCheck {
 
 /* yes,no判定に使用 */
 enum YesNoRetry {
-	YES = 1,
-	NO = 2,
-	RETRY = 3
+	YES = 0,
+	NO = 1,
+	RETRY = 2
 };	
 
 /* 新規会員登録時使用 */

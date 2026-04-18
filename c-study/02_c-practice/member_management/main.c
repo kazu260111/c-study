@@ -1,6 +1,10 @@
 #include "member.h"
 
 /*
+ * 現在バグの修正作業中
+ * - 編集中に続けて編集するでyを入力するとセグメンテーションフォルト
+ * 
+ *
  * === 登録した会員情報(スイミングスクール)を閲覧できるプログラム ===
  * 
  * 仕様：
@@ -31,7 +35,8 @@ int main() {
 	/* head(会員番号1番のアドレス)を得る(headはNULLでなければこれ以降変わらない) */
 	/* 会員番号1番が存在しない場合、head == NULL */
 	/* 読み込めたデータ件数を表示 */
-	read_file_ui(read_file(&head, &loaded_count), loaded_count);
+	enum ReadFileStatus read_status = read_file(&head, &loaded_count);
+	read_file_ui(read_status, loaded_count);
 	while (1) {
 		struct Member temp = {0};
 		/*>>> メニュー画面 <<<*/
@@ -115,7 +120,7 @@ int main() {
 					edit_ui(EDIT_CANCEL, 0);
 					continue;
 				}
-				struct Member *member_address;
+				struct Member *member_address = NULL;
 				/* member_addressに編集する会員のアドレスを渡す */
 				enum SearchMemberStatus search_status = search_member_address(head, temp.member_num, &member_address);
 				switch (search_status) {
@@ -128,6 +133,7 @@ int main() {
 						edit_ui(EDIT_MEMBER_IS_DELETED, 0);
 						continue;
 					default:
+						assert(0 && "search_member_addressの戻り値で問題が発生しました。");
 				}
 				/* tempに編集予定の会員情報をコピー */
 				temp = *member_address;
@@ -152,7 +158,7 @@ int main() {
 			/*>>> 会員情報削除 <<<*/
 			/* 
 			 * 入会中の全会員を表示し、ユーザが指定した会員の削除を実行する。
-			 * 会員情報削除は該当会員の名前を伏せ字に置き換え、備考を削除する。
+			 * 会員情報削除は該当会員の名前と備考を伏せ字に置き換える。
 			 * その後ファイルに書き込みを行う。 
 			 */
 			case SELECT_DELETE: 
@@ -219,8 +225,7 @@ int main() {
 			case SELECT_QUIT:
 				quit_message_ui();
 				free_all_memory(head);
-				break;
-
+				exit(0);
 			default:
 				assert(0 && "[DEBUG] menu_uiの戻り値で問題が発生しました。");
 		}
@@ -267,8 +272,13 @@ int main() {
  *
  * - 備考を未記入のままで進めると、データ書き込みのときに書き込むデータの種類が合わなくなる
  *   - 一人につき7種のデータをファイルに書くが、備考が未記入だと備考を除いた6種類のデータしか書き込まなくなるので読み取れなくなる
- *   -> 備考が未記入の場合"なし"と書き込むことにした
+ *   -> 備考が未記入の場合"なし"と書き込むことにした。会員情報削除時も、備考を削除ではなく伏せ字にすることにした。
  *
  * - 会員登録してもそのままだと編集、削除、閲覧ができない
  *   -> 入会時に入会フラグを立てるのを忘れていた 
+ *
+ * - tsvファイルを読み込んでも読み込んだデータ件数が0件と表示される
+ *   -> read_file_ui(read_status, loaded_count); のread_status部分にread_file(&head, &loaded_count)を直接入れていたが、実際の動作だとread_file_uiの引数のうちloaded_countが先に評価されるせいで、read_fileでloaded_countが更新される前にloaded_count = 0としてread_file_uiに読み込まれてしまっていた。
+ *
+ *
  */

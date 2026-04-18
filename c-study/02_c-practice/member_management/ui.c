@@ -48,11 +48,12 @@ enum MenuSelectCmd menu_ui() {
 			"4) 閲覧\n"
 			"q) やめる\n"
 		      );
-		char line[128];		
+		char line[128] = {0};	
 		if (get_cmd(line, sizeof(line)) == false) {
 			printf("入力が読み取れませんでした。\n");
+			continue;
 			}
-		char cmd_line[128];
+		char cmd_line[128] = {0};
 		check_line_is_str(line, cmd_line);
 		if (cmd_line[0] == 'q' || cmd_line[0] == 'Q') {
 			printf("プログラムを終了します。\n");
@@ -330,6 +331,7 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 			return CANCEL;
 		case EDIT_ITEM:
 			while (1) {
+				printf("[DEBUG] 3");
 				display_solo_member(temp);
 				printf(	"1) 名前  "
 					"2) クラス "
@@ -338,7 +340,7 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 					"5) 備考\n"
 				      );
 				printf("どの項目を編集しますか？\n");
-				char line[128];
+				char line[128] = {0};
 				if (get_cmd(line, sizeof(line)) == false) {
 					printf("入力がありませんでした。会員情報の編集を中止します。\n");
 					return CANCEL;
@@ -373,17 +375,22 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 			       	while (1) {
 					display_solo_member(temp);
 					printf("続けて編集しますか？[y/n]\n");
-					char line[128] = {0};
+					memset(line, 0, sizeof(line));
 					if (get_cmd(line, sizeof(line)) == false) {
 						printf("入力がありませんでした。やり直してください。\n");
 						continue;
 					}
+					printf("[DEBUG] get_cmd_after");
+
 					char cmd_line[128] = {0};
 					if (check_line_is_str(line, cmd_line) == false) {
 						 printf("入力が読み取れませんでした。やり直してください。\n");
 				    		continue;
 							}
-					switch (check_yes_or_no(cmd_line)) {
+					printf("[DEBUG] check_yes_or_no before");
+					enum YesNoRetry answer = check_yes_or_no(cmd_line);
+					printf("[DEBUG] check_yes_or_no after");
+					switch (answer) {
 						case YES:
 							break;
 						case NO:
@@ -392,8 +399,10 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 							printf("間違った入力です。やり直してください。\n");
 							continue;
 					}
+					printf("[DEBUG] 1");
 					break;
 				}
+				printf("[DEBUG] 2");
 				continue;
 			}
 			assert(0 && "[DEBUG] edit_uiのEDIT_ITEMのループで問題が発生しました。");
@@ -519,7 +528,7 @@ void view_ui(enum ViewStatus status) {
 			printf("入会中の会員情報を閲覧します。\n");
 			return;
 		case VIEW_WAIT:
-			printf("終了する場合Enterキーを押してください。\n");
+			printf("\n終了する場合Enterキーを押してください。\n");
 			char line[128];
 			get_cmd(line, sizeof(line));
 			return;

@@ -43,7 +43,7 @@ enum SearchMemberStatus search_member_address(struct Member *head, int member_nu
 		}
 	        current_address = current_address->next;
 	}
-	if (current_address->is_deleted_account) {
+	if (current_address->is_deleted_account == ACCOUNT_IS_DELETED) {
 		return IS_DELETED;
 	}
 	*member_address = current_address;
@@ -82,6 +82,7 @@ enum DeleteStatus delete_execute(struct Member *delete_member_address) {
 	memset(delete_member_address->name, 0, sizeof(delete_member_address->name));
 	strcpy(delete_member_address->name, "******");
 	memset(delete_member_address->note, 0, sizeof(delete_member_address->note));
+	strcpy(delete_member_address->note, "******");
 	return DELETE_COMPLETED;
 }
 
@@ -93,7 +94,7 @@ void free_all_memory(struct Member *head) {
 
 	struct Member *current_address = head;
 	while (current_address->next != NULL) {
-		/* current_address->nextをnext_addressに退避 */
+	/* current_address->nextをnext_addressに退避 */
 		struct Member *next_address = current_address->next;
 		free(current_address);
 		current_address = next_address;

@@ -20,13 +20,13 @@ enum ReadFileStatus read_file(struct Member **head, int *loaded_count) {
 	*head = first_member_address;
 	*loaded_count = 1;
 	/* 確保したアドレスにデータを入れる */
-	int status = scanf(line, "%d\t%1023[^\t]\t%d\t%d%s\t%d\t%4098[^\n]", 
+	int status = sscanf(line, "%d\t%1023[^\t]\t%d\t%d\t%s\t%d\t%4095[^\n]", 
 			&first_member_address->member_num,
 			first_member_address->name,
 			&first_member_address->class_num,
 			&first_member_address->age,
 			first_member_address->gender,
-			&first_member_address->is_deleted_account,
+			(int *)&first_member_address->is_deleted_account,
 			first_member_address->note
 	 		    );
 	if (status != 7) {
@@ -63,6 +63,7 @@ enum ReadFileStatus read_file(struct Member **head, int *loaded_count) {
 		 		    );
 		if (status != 7) {
 			read_file_ui(READ_ERROR_ABNORMAL_DATA, 0);
+			back_address->next = member_address;	
 			free_all_memory(*head);
 			fclose(fp);
 			exit(1);
@@ -79,7 +80,7 @@ enum ReadFileStatus read_file(struct Member **head, int *loaded_count) {
 		}
 
 	}
-	return READ_FAILED;
+	assert(0 && "read_fileで問題が発生しました。");
 }
 
 bool write_file(struct Member *head) {
