@@ -3,6 +3,9 @@
 bool register_get_new_member_num(struct Member *head, struct Member *temp) {
 	struct Member *tail = NULL;
 	enum SearchTailStatus search_status = search_tail(head, &tail);
+	if (tail != NULL && tail->member_num >= MAX_MEMBER) {
+			return false;
+	}
 	switch (search_status) {
 		case SEARCHTAIL_NO_MEMBER:
 			temp->member_num = 1;
@@ -11,11 +14,11 @@ bool register_get_new_member_num(struct Member *head, struct Member *temp) {
 			temp->member_num = tail->member_num + 1;
 			return true;
 		case SEARCHTAIL_FAILED:
-			return false;
+			assert(0 && "[DEBUG] search_statusの戻り値が予期しない結果です。");
 		default:
 			assert(0 && "[DEBUG] register_get_new_member_num内のsearch_tailの戻り値で問題が発生しました。");
 	}	
-	assert(0 && "[DEBUG] register_get_new_member_numで問題が発生しました。");;
+	assert(0 && "[DEBUG] register_get_new_member_numで問題が発生しました。");
 }
 
 
@@ -83,6 +86,7 @@ enum DeleteStatus delete_execute(struct Member *delete_member_address) {
 	strcpy(delete_member_address->name, "******");
 	memset(delete_member_address->note, 0, sizeof(delete_member_address->note));
 	strcpy(delete_member_address->note, "******");
+	delete_member_address->is_deleted_account = ACCOUNT_IS_DELETED;
 	return DELETE_COMPLETED;
 }
 

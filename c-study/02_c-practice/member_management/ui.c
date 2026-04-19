@@ -331,7 +331,6 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 			return CANCEL;
 		case EDIT_ITEM:
 			while (1) {
-				printf("[DEBUG] 3");
 				display_solo_member(temp);
 				printf(	"1) 名前  "
 					"2) クラス "
@@ -380,16 +379,13 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 						printf("入力がありませんでした。やり直してください。\n");
 						continue;
 					}
-					printf("[DEBUG] get_cmd_after");
 
 					char cmd_line[128] = {0};
 					if (check_line_is_str(line, cmd_line) == false) {
 						 printf("入力が読み取れませんでした。やり直してください。\n");
 				    		continue;
 							}
-					printf("[DEBUG] check_yes_or_no before");
 					enum YesNoRetry answer = check_yes_or_no(cmd_line);
-					printf("[DEBUG] check_yes_or_no after");
 					switch (answer) {
 						case YES:
 							break;
@@ -399,13 +395,12 @@ enum CancelCheck edit_ui(enum EditStatus status, struct Member *temp) {
 							printf("間違った入力です。やり直してください。\n");
 							continue;
 					}
-					printf("[DEBUG] 1");
 					break;
 				}
-				printf("[DEBUG] 2");
 				continue;
 			}
 			assert(0 && "[DEBUG] edit_uiのEDIT_ITEMのループで問題が発生しました。");
+
 		case EDIT_CONFIRM:
 			while (1) {
 				printf(	"会員番号：%d\n"

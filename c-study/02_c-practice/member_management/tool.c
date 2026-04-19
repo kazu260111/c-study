@@ -25,10 +25,24 @@ bool check_line_is_num(char *line, int *cmd) {
 }
 
 bool check_line_is_str(char *line, char *cmd_line) {
-	if (sscanf(line, " %s", cmd_line) != 1) {
-	       return false;
-	}
-	return true;
+    size_t len = strlen(line);
+    /* \nを消して\0にする */
+    if (len > 0 && line[len - 1] == '\n') {
+        line[len - 1] = '\0';
+    }
+
+    size_t n = 0;
+    while (line[n] == ' ' || line[n] == '\t') {
+        n++;
+    }
+    /* 改行か空白しか入力されていなかったらfalse */
+    if (line[n] == '\0') {
+        return false;
+    }
+
+    /* 先頭の空白を飛ばしてからコピー */
+    strcpy(cmd_line, line + n); 
+    return true;
 }
 
 void clear_input_buffer (void) {
