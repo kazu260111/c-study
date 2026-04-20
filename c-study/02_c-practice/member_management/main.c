@@ -236,6 +236,7 @@ int main() {
 /*
  * メモ：
  * 前回の経験(failed_structure_member.c)を活かして以下の点に注意して制作することにした。
+ * 失敗したバージョン -> https://github.com/kazu260111/c-study/blob/main/c-study/02_c-practice/failed_structure_member.c
  *
  * 1. プログラムの実装方法と全体の流れの確認
  *
