@@ -2,6 +2,7 @@
  * ===== 注意：このプログラムは動作しません。=====
  * 
  * 参考資料として残しています。動作するプログラムはmember_managementフォルダにあります。
+ * 以下が動作するプログラムのURL
  * https://github.com/kazu260111/c-study/tree/main/c-study/02_c-practice/member_management
  *
  * このプログラムを書いたときのメモ（感想）はこのファイルの最後にあります。
