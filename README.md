@@ -70,11 +70,12 @@ Pythonについて学んだことをまとめる。
     - 訳者：牧野　聡
     - 出版社：オライリー・ジャパン
 
-## その他の参考書籍
+### [TCP-IP](./TCP-IP)
 - **ゼロからのTCP/IPプロトコルスタック自作入門**
   - 著者：山本　雄也
   - 出版社：マイナビ出版
-  - メモ：[forkした別リポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて学習中
+  - 備考：[forkした別リポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて学習中
+  - [学習メモ](./TCP-IP/microps_study_log.md)
 
 ## 追加予定のディレクトリ
 ### Rust-study
