@@ -104,6 +104,8 @@ num_select_ui(enum NumSelect status, struct Calc *calc) {
 				calc->first = cmd;
 				break;
 			}
+			break;
+
 		case (NUM_SECOND):
 			while (1) {
 				printf("二番目の数字を入力してください。\n");
@@ -121,6 +123,7 @@ num_select_ui(enum NumSelect status, struct Calc *calc) {
 				break;
 			}
 			break;
+
 		default:
 			printf("[DEBUG] これは実行されないはずのコードです\n");
 			break;
@@ -157,9 +160,10 @@ select_mani(struct Calc *calc) {
 				calc->ope_func = mul_calc;
 				break;
 			default:
-				printf("[DEBUG] これは実行されないはずのコードです\n");
-				break;
+				printf("不適切な入力です。やり直してください。\n");
+				continue;
 			}
+		break;
 	}
 	return 0;
 }
