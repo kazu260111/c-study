@@ -2,9 +2,113 @@
 - 「ゼロからのTCP/IPプロトコルスタック自作自作入門」を読みながら学習したことをまとめる。
 - [このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて学習中。
 
+## 第4回 (step ) 2026-04-25,26
+### 今回やったこと(概要)
+- Appendix 1  A1.4 ~ A1.6  (書籍 p578 ~ p585)
+
+
+### 学べたこと(具体的な内容)
+- 以下は学習のためにplatform/linux/intr.cの一部にコメントをつけたもの(p577~)
+
+```c
+/*>>> 割り込み管理の構造体 <<<*/
+/* どの割り込みが発生したらどの処理が実行されるかの情報をもっている */ 
+struct irq_entry {
+    struct irq_entry *next;  /* 次の要素を指すポインタ */
+    unsigned int irq;  /* 割り込みを識別する値, I/Oイベントの通知で使用するシグナル番号 */
+    intr_isr_t isr;  /* 割り込みハンドラの関数ポインタ。割り込みが起きたときに実行する関数のポインタを置く。 */
+    int flags;  /* INTR_IRQ_SHAREDで使用されるフラグ。フラグ設定時一つの割り込み番号を複数デバイスで共有できる。 */
+    void *arg;
+};
+
+/*
+ * NOTE: if you want to add/delete the entries after intr_run(),
+ *       you need to protect these lists with a mutex.
+ */
+/* 割り込みリストの先頭部分のポインタとしてグローバル変数irqsを定義する */
+/* 割り込みが起きたとき、irqsから順番にリストを走査する */
+static struct irq_entry *irqs;
+
+static pthread_t tid;
+static pthread_barrier_t barrier;
+static sigset_t sigmask;
+
+/*>>> 割り込み登録関数 <<<*/
+int
+intr_register(unsigned int irq, intr_isr_t isr, int flags, void *arg)
+{
+    /* 登録したい割り込み設定 */
+    struct irq_entry *entry;
+
+    /* irqsから始めて、nextがNULLになるまでリストを走査する */
+    for (entry = irqs; entry; entry = entry->next) {
+        /* もし登録したい割り込み番号が登録予定の割り込み番号と一致した場合 */
+        if (entry->irq == irq) {
+            /* INTR_IRQ_SHARED は別ファイルで0x0001と定義されているので、entry->flagsかflagsのどちらかが0だった場合は{}ブロックが実行される
+            -> 同じ番号を共有できない設定と判定されてエラーとなる  */
+            if (entry->flags ^ INTR_IRQ_SHARED || flags ^ INTR_IRQ_SHARED) {
+                errorf("conflicts with already registered IRQs, irq=%u", irq);
+                return -1;
+            }
+        }
+    }
+    /* entry用のメモリ確保 */
+    entry = memory_alloc(sizeof(*entry));
+    /* NULLなら(メモリが確保できなかったら)エラーを出す */
+    if (!entry) {
+        errorf("memory_alloc() failure");
+        return -1;
+    }
+    /* entryに割り込み設定を入れていく */
+    entry->irq = irq;
+    entry->isr = isr;
+    entry->flags = flags;
+    entry->arg = arg;
+    /* リストの後ろではなく、先頭に追加する */
+    entry->next = irqs;
+    /* irqsが新しい割り込み設定のアドレスを指すようにする */
+    irqs = entry;
+    /* sigmask(グローバル変数)に含まれるシグナルを待ち受ける
+     * -> sigaddsetでsigmaskにirq(シグナル番号)を登録
+     * (共有フラグが設定されていないなら、一つのシグナルに対して一つの割り込みが対応している) 
+     */
+    sigaddset(&sigmask, irq);
+    infof("success, irq=%u", irq);
+    return 0;
+}
+
+```
+- 割り込み機構の実装(p580) /platform/linux/intr.cの一部
+
+```c
+static pthread_t tid;  /* スレッドID */
+static pthread_barrier_t barrier;  /* バリア変数(スレッドの同期をとる)
+static sigset_t sigmask;  /* シグナルの集合 */
+
+int
+intr_init(void)
+{
+    tid = pthread_self();  /* スレッドの初期化 */
+    pthread_barrier_init(&barrier, NULL, 2);  /* バリア変数に同期をとるスレッドを設定 */
+    sigemptyset(&sigmask);  /* シグナル集合の初期化(空にする) */
+    sigaddset(&sigmask, SIGHUP);  /* SIGHUPを設定 */
+    return 0;
+}
+
+```
+
+
+### つまづいたこと・難しかったこと(引っかかったところや疑問に思ったこと)
+- シグナルに関する関数をよく知らなかったのでsignal.hを見に行ってみたが、時間がかかるのでとりあえず使い方を理解するようにしたい。(調べたsigset_tは1024ビットでシグナルのオンオフを表す配列のようだった)
+
+### 感想
+- 書籍のコードに自分でコメントを書くとかなり理解しやすくなるので、難しいところはコメントをつけていきたい。
+
+#### メモ(本筋から外れた、あるいは重要度の低い内容)
+
 ## 第3回 (Appendix 1) 2026-04-22,23
 ### 今回やったこと(概要)
-- Appendix 1  A1.1 ~ A1.4  (書籍 p573 ~ p578)
+- Appendix 1  A1.1 ~ A1.3  (書籍 p573 ~ p578)
   - 割り込み処理
 
 ### 学べたこと(具体的な内容)
