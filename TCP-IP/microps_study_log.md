@@ -2,10 +2,77 @@
 - 「ゼロからのTCP/IPプロトコルスタック自作自作入門」を読みながら学習したことをまとめる。
 - [このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて学習中。
 
-## 第4回 (step ) 2026-04-25,26
+## 第5回  2026-04-27
+### 今回やったこと(概要)
+- Appendix 2 (書籍 p587 ~ )
+  - タイマー処理
+
+### 学べたこと(具体的な内容)
+- 以下は platform/linux/timer.c の一部
+
+```c
+/* タイマー構造体 */
+struct timer {
+    struct timer *next;  /* 次のタイマーを指すポインタ */
+    struct timeval interval;  /* タイマーの発火間隔(タイマー割り込みの間隔) */
+    struct timeval last;  /* タイマーが最後に発火した時刻 */
+    void (*handler)(void);  /* タイマーが発火したときの関数のポインタ */
+};
+
+static timer_t timerid;
+
+/* タイマーが起動したら、新しいタイマーを登録できない(排他制御の仕組みが必要)
+ * もしタイマー起動中に新しく登録しようとすると、タイマーリストの走査中に登録のためにリストを書き換えようとして予想外のアドレスを読み込んでしまいセグメンテーションフォルトが起こったりする
+ * (必ずしもCPUはソースコード順にプログラムを実行するわけではない)
+ */
+/*
+ * NOTE: if you want to add/delete the entries after timer_run(),
+ *       you need to protect these lists with a mutex.
+ */
+static struct timer *timers;
+
+/* タイマーの登録関数 */
+int
+timer_register(struct timeval interval, void (*handler)(void))
+{
+    struct timer *timer;
+
+    /* タイマーの構造体のメモリを確保 */
+    timer = memory_alloc(sizeof(*timer));
+    /* timerがNULL(メモリを確保できなかった)なら */
+    if (!timer) {
+        errorf("memory_alloc() failure");
+        return -1;
+    }
+    
+    /* タイマー変数に各値を入れる */
+    timer->interval = interval;
+    gettimeofday(&timer->last, NULL);  /* 現在時刻を入れる */
+    timer->handler = handler;
+    /* リストの先頭に追加 */
+    timer->next = timers;
+    timers = timer;
+    infof("success, interval={%d, %d}", interval.tv_sec, interval.tv_usec);
+    return 0;
+}
+
+```
+
+### つまづいたこと・難しかったこと(引っかかったところや疑問に思ったこと)
+
+
+### 解決した方法(自力での試行錯誤や調べた内容)
+
+
+### 感想
+
+
+#### メモ(本筋から外れた、あるいは重要度の低い内容)
+
+
+## 第4回  2026-04-25,26
 ### 今回やったこと(概要)
 - Appendix 1  A1.4 ~ A1.6  (書籍 p578 ~ p585)
-
 
 ### 学べたこと(具体的な内容)
 - 以下は学習のためにplatform/linux/intr.cの一部にコメントをつけたもの(p577~)
@@ -95,6 +162,91 @@ intr_init(void)
     return 0;
 }
 
+int
+intr_run(void)
+{
+    int err;
+    /* sigmaskに登録してあるシグナルにメインスレッドが反応しないようにする */
+    err = pthread_sigmask(SIG_BLOCK, &sigmask, NULL);
+    if (err) {
+        errorf("pthread_sigmask() %s", strerror(err));
+        return -1;
+    }
+    /* intr_mainを実行する子スレッドを作成。さっき設定したシグナルブロックの設定を引き継ぐ。 */
+    /* 起動したスレッドのスレッドIDをグローバル変数tidに入れる。 */
+    err = pthread_create(&tid, NULL, intr_main, NULL);
+    if (err) {
+        errorf("pthread_create() %s", strerror(err));
+        return -1;
+    }
+    /* intr_mainとintr_run(ここ)にあるこの関数が実行されない限り進まない。
+     * ここで同期を取っている。
+     */
+    pthread_barrier_wait(&barrier);
+    return 0;
+}
+
+int
+intr_shutdown(void)
+{
+    /* tidとpthread_self()の値を比べて、これらが等しいならスレッドは作られていないことになる(tidで intr_mainが実行されていないことになる) */
+    if (pthread_equal(tid, pthread_self()) != 0) {
+        /* Thread not created. */
+        return -1;
+    }
+    /* intr_initで設定したSIGHUPのシグナルをシグナル処理スレッド(intr_main)に送る */
+    pthread_kill(tid, SIGHUP);
+    /* シグナル処理スレッドが終わるのを待ってスレッドのリソースを回収する(スタック領域などを回収する) */
+    pthread_join(tid, NULL);
+    return 0;
+}
+
+/*>>> シグナル処理スレッド <<<*/
+static void *
+intr_main(void *arg)
+{
+    int terminate = 0, sig, err;
+    struct irq_entry *entry;
+
+    infof("start...");
+    /* intr_runと同期を取っている */
+    pthread_barrier_wait(&barrier);
+    /* SIGHUPシグナルを受け取るまでループ */
+    while (!terminate) {
+        /* sigmaskに設定したシグナルが来るまで待機 */
+        /* intr_runのシグナル配送禁止の設定はこのスレッドに引き継がれているが、sigwaitで待つことはできる */
+        err = sigwait(&sigmask, &sig);
+        if (err) {
+            errorf("sigwait() %s", strerror(err));
+            break;
+        }
+        switch (sig) {
+        /* シグナルがSIGHUPだった場合 */
+        case SIGHUP:
+            /* ループを終わらせるためのフラグを立てる */
+            terminate = 1;
+            break;
+        default:
+            if (sig != INTR_IRQ_TIMER) {
+                debugf("IRQ <%d> occurred", sig);
+            }
+            /* irqs(リストの先頭)から走査して、シグナルと割り込み番号が一致すれば割り込みハンドラを呼び出す。 */
+            for (entry = irqs; entry; entry = entry->next) {
+                if (entry->irq == (unsigned int)sig) {
+                    entry->isr(entry->irq, entry->arg);
+                    /* もしentry->flag が1なら、走査を続行する(0ならここでbreak) */
+                    if (entry->flags ^ INTR_IRQ_SHARED) {
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    infof("terminated");
+    return NULL;
+}
+
 ```
 
 
@@ -103,10 +255,10 @@ intr_init(void)
 
 ### 感想
 - 書籍のコードに自分でコメントを書くとかなり理解しやすくなるので、難しいところはコメントをつけていきたい。
+  - 一つ一つの関数は短いので読みやすいと思った。今後のプログラミングの参考にしたい。
+- 安全にシグナルを受け取るには、親プロセスの段階でSIG_BLOCKを設定して子プロセスでsigwaitを実行するのが重要だとわかった。
 
-#### メモ(本筋から外れた、あるいは重要度の低い内容)
-
-## 第3回 (Appendix 1) 2026-04-22,23
+## 第3回  2026-04-22,23
 ### 今回やったこと(概要)
 - Appendix 1  A1.1 ~ A1.3  (書籍 p573 ~ p578)
   - 割り込み処理
@@ -165,7 +317,7 @@ intr_init(void)
 
 
 
-## 第2回 (step 0) 2026-04-21
+## 第2回  2026-04-21
 ### 今回やったこと(概要)
 - step 0 はじめに (p15 ~ p43)
 - clangdのインストール
@@ -201,7 +353,7 @@ intr_init(void)
     - 先にmake clean を実行しておく
 
 
-## 第1回 (step 0) 2026-04-20
+## 第1回  2026-04-20
 ### 今回やったこと(概要)
 - 開発の流れの確認 (書籍 p15 ~ p43)
 - 使用する初期ファイルの概要把握
