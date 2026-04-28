@@ -1,10 +1,274 @@
+# 引用元
+- このファイルのソースコードは書籍「ゼロからのTCP/IPプロトコルスタック自作入門」または[こちらのリポジトリ](https://github.com/pandax381/microps)から引用、改変したものです。
+- ソースコードのライセンスはMITライセンスです。詳しくはLICENSEをご確認ください。
+
+## 書籍情報
+**書籍名**: ゼロからのTCP/IPプロトコルスタック自作自作入門
+**著者**: 山本雅也
+**出版社**: マイナビ出版
+
 # 学習メモ
 - 「ゼロからのTCP/IPプロトコルスタック自作自作入門」を読みながら学習したことをまとめる。
 - [このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて学習中。
 
-## 第5回  2026-04-27
+
+
+## Appendix 3 2026-04-28
 ### 今回やったこと(概要)
-- Appendix 2 (書籍 p587 ~ )
+- Appendix 3 (書籍 p595~)
+  - タスク管理
+
+### 学べたこと(具体的な内容)
+- タスク構造体 (p595) 
+
+```c
+/* 排他制御に使うlockを定義 */
+static lock_t lock = LOCK_INITIALIZER;
+static struct sched_task *tasks; /* sleep tasks */
+
+struct sched_task {
+    struct sched_task *next;  /* 次の要素を指すポインタ */
+    pthread_cond_t cond;  /* pthreadライブラリの条件変数。条件を満たすまでスレッドを待機させられる */
+    int interrupted;  /* スケジュールされたタスクが中断されたときは1、通常時0 */
+    /* 休止タスクのスレッド数のカウント。スレッドが待機しているときはsched_task_destroyで条件変数を破棄しないようにする */
+    int wc; /* wait count */
+};
+
+```
+
+- タスク構造体の初期化 (p596)
+
+```c
+
+int
+sched_task_init(struct sched_task *task)
+{
+    /* 構造体に各値を入れる */
+    /* 次の要素をNULLに */
+    task->next = NULL;
+    /* 条件変数condはこの関数で初期化 */
+    pthread_cond_init(&task->cond, NULL);
+    /* タスクが中断されたを示すフラグを0に初期化 */
+    task->interrupted = 0;
+    /* 待機スレッド数のカウンタを0に初期化 */
+    task->wc = 0;
+    return 0;
+}
+
+```
+
+- タスク構造体のリソース解放 (p596)
+
+```c
+
+int
+sched_task_destroy(struct sched_task *task)
+{   
+    /* 休止状態のタスクがあるならキャンセル */
+    if (task->wc) {
+        return -1;
+    }
+    /* 条件変数condを破棄してリソースを解放する */
+    return pthread_cond_destroy(&task->cond);
+}
+
+```
+
+- タスクの休止 (p597)
+
+```c
+
+/* 引数：タスク構造体のポインタ、ロック構造体のポインタ、タイムアウト時間 */
+int
+sched_task_sleep(struct sched_task *task, lock_t *lock, const struct timespec *abstime)
+{
+    int ret;
+    /* 割り込みが来ていたら休止をやめてエラーを返す */
+    if (task->interrupted) {
+        errno = EINTR;
+        return -1;
+    }
+    /* 休止スレッド数を1増やす */
+    task->wc++;
+    /* 休止タスクのリストに追加 */
+    tasks_add(task);
+    /* タイムアウト時間が0でないなら、pthread_cond_timedwaitを使用 */
+    if (abstime) {
+        ret = pthread_cond_timedwait(&task->cond, lock, abstime);
+    } else {
+        /* タイムアウト時間が0(NULL)ならpthread_cond_waitを使用 */
+        ret = pthread_cond_wait(&task->cond, lock);
+    }
+    /* 休止から復帰する */
+    tasks_del(task);
+    /* 休止スレッド数を1減らす */
+    task->wc--;
+    /* 割り込みが来ていたら */
+    if (task->interrupted) {
+        /* もし他に休止スレッドがないならフラグを0にする */
+        /* 他のスレッドがいる場合はそのスレッドが割り込まれたことを認識させるためにフラグを1のままにしておく */
+        if (!task->wc) {
+            task->interrupted = 0;
+        }
+        errno = EINTR;
+        return -1;
+    }
+    return ret;
+}
+
+```
+
+- 休止タスクのリストへの追加 (p599)
+  - 書籍のコードとGithubのコードでsleep tasksの名前が変わっていた
+
+```c
+
+static lock_t lock = LOCK_INITIALIZER;
+static struct sched_task *tasks; /* sleep tasks */
+
+static void
+tasks_add(struct sched_task *task)
+{
+    /* 排他制御(鍵をかける) */
+    lock_acquire(&lock);
+    /* taskをリストの最初に入れる */
+    task->next = tasks;
+    tasks = task;
+    /* 鍵を開ける */
+    lock_release(&lock);
+}
+
+```
+
+- 休止タスクのリストから削除 (p599)
+  - 関数や変数の名前が書籍と変わっている
+
+```c
+
+static void
+tasks_del(struct sched_task *task)
+{
+    struct sched_task *entry;
+    /* 排他制御 */
+    lock_acquire(&lock);
+    /* 削除するタスクが先頭のとき */
+    if (tasks == task) {
+        /* tasksのアドレスを削除するタスクが指している次のタスクのアドレスに設定 */
+        tasks = task->next;
+        /* リストから消したタスクが他のタスクを指さないようにする */
+        task->next = NULL;
+        /* 排他制御終了 */
+        lock_release(&lock);
+        return;
+    }
+    /* 削除するタスクを先頭から走査して探す */
+    for (entry = tasks; entry; entry = entry->next) {
+        /* 削除するタスクが見つかったら */
+        if (entry->next == task) {
+            /* 削除するタスクをリストから外すようにnextを変更 */
+            entry->next = task->next;
+            /* リストから消したタスクが他のタスクを指さないようにする */    
+            task->next = NULL;
+            break;
+        }
+    }
+    /* 排他制御終了 */
+    lock_release(&lock);
+}
+
+```
+
+- タスクの起床 (p600)
+
+```c
+
+int
+sched_task_wakeup(struct sched_task *task)
+{
+    /* 休止タスクを全て起こす */
+    return pthread_cond_broadcast(&task->cond);
+}
+
+```
+
+- タスク管理機構の初期化 (p601)
+
+```c
+
+int
+sched_init(void)
+{
+    /* INTR_IRQ_USERが来たときの割り込みハンドラを設定 */
+    return intr_register(INTR_IRQ_USER, sched_irq_handler, 0, NULL);
+}
+
+```
+
+- 割り込みハンドラ (p601)
+
+```c
+
+/* INTR_IRQ_USERに対して呼び出される割り込みハンドラ */
+static void
+sched_irq_handler(unsigned int irq, void *arg)
+{
+    struct sched_task *task;
+
+    /* 使わない引数 */
+    (void)irq;
+    (void)arg;
+    /* 排他制御 */
+    lock_acquire(&lock);
+    /* タスクを先頭から走査 */
+    for (task = tasks; task; task = task->next) {
+        /* 割り込みが発生したとき */
+        if (!task->interrupted) {
+            task->interrupted = 1;
+            /* 全スレッドを起こす */
+            pthread_cond_broadcast(&task->cond);
+        }
+    }
+    /* 排他制御終了 */
+    lock_release(&lock);
+}
+
+```
+
+
+- タスク管理機構の起動 (p602)
+
+```c
+
+/* 何もしないが恐らくわかりやすさのためにあるダミーの関数 */
+int
+sched_run(void)
+{
+    /* do nothing */
+    return 0;
+}
+
+```
+
+- タスク管理機構の停止 (p602)
+
+```c
+
+/* ダミーの関数 */
+int
+sched_shutdown(void)
+{
+    /* do nothing */
+    return 0;
+}
+
+```
+### 感想
+- 読んで大体理解できたと思う。排他制御が出てきたが、うっかり鍵をかけたままにせず解放するまでを忘れないようにしたい。
+- 排他制御は他にもデッドロックや優先度逆転など気をつけることが多いらしいので、注意して使うようにしたい。
+
+## Appendix 2  2026-04-27
+### 今回やったこと(概要)
+- Appendix 2 (書籍 p587~)
   - タイマー処理
 
 ### 学べたこと(具体的な内容)
@@ -58,19 +322,105 @@ timer_register(struct timeval interval, void (*handler)(void))
 
 ```
 
-### つまづいたこと・難しかったこと(引っかかったところや疑問に思ったこと)
+- タイマー機構の初期化(p590~)
 
+```c
+int
+timer_init(void)
+{
+    struct sigevent sev;
+    
+    /* シグナルをプロセスに送るように設定 */
+    sev.sigev_notify = SIGEV_SIGNAL;
+    /* INTR_IRQ_TIMERで設定したシグナルを送るよう設定 */
+    sev.sigev_signo = INTR_IRQ_TIMER;
+    /* ポインタを渡すように設定 */
+    sev.sigev_value.sival_ptr = &timerid;
+    /* タイマー作成 */
+    if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1) {
+        errorf("timer_create: %s", strerror(errno));
+        return -1;
+    }
+    return intr_register(INTR_IRQ_TIMER, timer_irq_handler, 0, NULL);
+}
 
-### 解決した方法(自力での試行錯誤や調べた内容)
+```
+- タイマー割り込みの捕捉(p592~)
 
+```c
+
+static void
+timer_irq_handler(unsigned int irq, void *arg)
+{
+    struct timer *timer;
+    struct timeval now, diff;
+    /* 使わない引数 */
+    (void)irq;
+    (void)arg;
+    /* 現在時刻の取得 */
+    gettimeofday(&now, NULL);
+    /* タイマーリストを走査 */
+    for (timer = timers; timer; timer = timer->next) {
+        /* nowからtimer->lastを引いて、差をdiffに格納 */
+        timersub(&now, &timer->last, &diff);
+        /* diffがtimer->intervalより大きかったら発火 */
+        if (timercmp(&timer->interval, &diff, <) != 0) { /* true (!0) or false (0) */
+            /* 発火したタイマーの関数を実行 */
+            /* メモ：この関数の実行に時間がかかると、他のタイマーの走査が遅れて正確な時間が測れない可能性がある */
+            timer->handler();
+            /* timer->lastの更新 */
+            timer->last = now;
+        }
+    }
+}
+
+```
+- タイマー機構の起動(p592~)
+
+```c
+
+int
+timer_run(void)
+{
+    /* 1msをtsに設定 */
+    const struct timespec ts = {0, 1000000}; /* 1ms */
+    /* タイマーの間隔を設定 */
+    struct itimerspec interval = {ts, ts};
+    
+    /* タイマーの起動 */
+    if (timer_settime(timerid, 0, &interval, NULL) == -1) {
+        errorf("timer_settime: %s", strerror(errno));
+        return -1;
+    }
+    /* タイマーの情報を表示 */
+    infof("interval={%d, %d}, initial={%d, %d}",
+        interval.it_interval.tv_sec, interval.it_interval.tv_nsec,
+        interval.it_value.tv_sec, interval.it_value.tv_nsec);
+    return 0;
+}
+
+```
+- タイマー機構の停止(p593~)
+
+```c
+
+int
+timer_shutdown(void)
+{
+    /* タイマーを削除する */
+    if (timer_delete(timerid) == -1) {
+        errorf("timer_delete: %s", strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+```
 
 ### 感想
+- POSIXのタイマーの扱い方を学んだが、APIの使い方は自作プログラムでやりながら覚えるのが良いと思うので復習したい。
 
-
-#### メモ(本筋から外れた、あるいは重要度の低い内容)
-
-
-## 第4回  2026-04-25,26
+## Appendix 1  2026-04-25,26
 ### 今回やったこと(概要)
 - Appendix 1  A1.4 ~ A1.6  (書籍 p578 ~ p585)
 
@@ -258,7 +608,7 @@ intr_main(void *arg)
   - 一つ一つの関数は短いので読みやすいと思った。今後のプログラミングの参考にしたい。
 - 安全にシグナルを受け取るには、親プロセスの段階でSIG_BLOCKを設定して子プロセスでsigwaitを実行するのが重要だとわかった。
 
-## 第3回  2026-04-22,23
+## Appendix 1  2026-04-22,23
 ### 今回やったこと(概要)
 - Appendix 1  A1.1 ~ A1.3  (書籍 p573 ~ p578)
   - 割り込み処理
@@ -317,7 +667,7 @@ intr_main(void *arg)
 
 
 
-## 第2回  2026-04-21
+## step 0  2026-04-21
 ### 今回やったこと(概要)
 - step 0 はじめに (p15 ~ p43)
 - clangdのインストール
@@ -353,7 +703,7 @@ intr_main(void *arg)
     - 先にmake clean を実行しておく
 
 
-## 第1回  2026-04-20
+## step 0  2026-04-20
 ### 今回やったこと(概要)
 - 開発の流れの確認 (書籍 p15 ~ p43)
 - 使用する初期ファイルの概要把握
