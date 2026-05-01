@@ -8,10 +8,546 @@
 **出版社**: マイナビ出版
 
 # 学習メモ
-- 「ゼロからのTCP/IPプロトコルスタック自作自作入門」を読みながら学習したことをまとめる。
-- [このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて学習中。
+- 「ゼロからのTCP/IPプロトコルスタック自作自作入門」を読みながら学習したことをまとめる
+- 引用元リポジトリに自分のコメントをつけることで理解を深める
+- 書籍を読みながらTCP/IPプロトコルスタックを完成させる
+- プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
 
+## step 3 2026-05-01
+### 今回やったこと(概要)
+- step 3 (書籍 p79~)
+  - プロトコルの管理
+
+### 学べたこと(具体的な内容)
+- プロトコル種別
+  - IP (Internet Protocol)
+    - 0x0800
+  - ARP (Address Resolution Protocol)
+    - 0x0806
+  - RARP (Reverse ARP)
+    - 0x8035
+  - IPv6 (Internet Protocol version 6)
+    - 0x86dd
+
+- プロトコル処理をモジュール化して、後から新しいプロトコルのモジュールを追加できるようにする
+- 対応していないプロトコルのパケットは破棄する
+
+- プロトコル構造体 (p83)
+
+```c
+
+struct net_protocol {
+    struct net_protocol *next;  /* プロトコルのリストを走査する */
+    uint16_t type;  /* プロトコル種別(定数) */
+    net_protocol_handler_t handler;  /* プロトコルパケットを処理する入力ハンドラの関数ポインタ */
+};
+
+```
+
+### つまづいたこと・難しかったこと(引っかかったところや疑問に思ったこと)
+
+
+### 解決した方法(自力での試行錯誤や調べた内容)
+
+
+### 感想
+
+
+#### メモ(本筋から外れた、あるいは重要度の低い内容)
+## step 2 2026-04-30
+### 今回やったこと(概要)
+- step 2 (書籍 p63~)
+  - デバイスドライバ
+    - ネットワークデバイスのドライバ
+    - ループバックデバイスのドライバ
+
+### 学べたこと(具体的な内容)
+- デバイスドライバ
+  - ネットワークデバイスの管理
+    - ネットワークデバイスによってデバイス操作の方法はバラバラ
+      - デバイス依存の処理はデバイスドライバに実装し、デバイス制御の共通インターフェースが
+        デバイスドライバを呼び出すようにする
+        -> OSは個々のデバイスの違いを気にしなくて良くなる
+  - システム起動時など、デバイスを検出したタイミングでロード、初期化ルーチンを呼び出す
+
+- 初期化ルーチン
+  - デバイスを管理するためのオブジェクト生成
+  - デバイスドライバの制御のルーチンを紐付けてシステムに登録
+ 
+- struct net_device_ops
+  - デバイス固有の処理を行う関数のアドレスを格納する構造体
+    ポリモーフィズムを実現する(共通のインターフェースで操作できるようにする)
+  - ３つの関数ポインタ(open, close, output)をもつ
+
+- 制御ルーチンの呼び出し(p69)
+  - ネットワークデバイスの起動
+```c
+
+struct net_device {
+    struct net_device *next;
+    unsigned int index;
+    char name[IFNAMSIZ];
+    uint16_t type;
+    uint16_t mtu;
+    uint16_t flags;
+    uint16_t hlen;
+    uint16_t alen;
+    uint8_t addr[NET_DEVICE_ADDR_LEN];
+    uint8_t broadcast[NET_DEVICE_ADDR_LEN];
+    struct net_device_ops *ops;  /* デバイス固有の処理を行う関数のアドレスを格納する構造体のポインタ */
+    void *priv;  /* 任意のデータを指すポインタ、どのようなデータでも紐付けられるようにvoid *型 */
+};
+
+static int
+net_device_open(struct net_device *dev)
+{
+    /* 省略 */
+    /* 制御ルーチンの呼び出しをする */
+	if (dev->ops->open) {
+		if (dev->ops->open(dev) == -1) {
+			errorf("failure, dev=%s", dev->name);
+			return -1;
+		}
+    /* 省略 */
+	return 0;
+}
+
+```
+
+- ネットワークデバイスの停止 (p70)
+
+```c
+
+static int
+net_device_close(struct net_device *dev)
+{
+    /* 省略 */
+    /* 停止ルーチンの起動、もし停止ルーチンがNULLなら停止ルーチンがないのでスキップ */
+	if (dev->ops->close) {
+		if (dev->ops->close(dev) == -1) {
+			errorf("failure, dev=%s", dev->name);
+			return -1;
+		}
+	}
+    /* 省略 */
+	return 0;
+}
+
+```
+
+- ネットワークデバイスへの出力 (p70)
+
+```c
+
+int
+net_device_output(struct net_device *dev, uint16_t type, const uint8_t *data, size_t len, const void *dst)
+{
+    /* 省略 */
+    /* 出力ルーチンがNULLだったら(アドレスが設定されていないなら)エラーにする */
+	if (!dev->ops->output) {
+		errorf("output callback function is not set, dev=%s", dev->name);
+		return -1;
+	}
+    /* 出力ルーチンを実行 */
+    /* devはデバイスのパラメータで、type, data, len, dstは送信データのパラメータ */
+	if (dev->ops->output(dev, type, data, len, dst) == -1) {
+		errorf("failure, dev=%s, len=%zu", dev->name, len);
+		return -1;
+	}
+	return 0;
+}
+
+```
+
+- ネットワークデバイスからの入力 (p601)
+
+```c
+
+int
+net_input(uint16_t type, const uint8_t *data, size_t len, struct net_device *dev)
+{
+    /* この段階ではデバック情報を表示しておくだけ。%04xで4桁を16進数で表示 */
+	debugf("dev=%s, type=0x%04x, len=%zu", dev->name, type, len);
+	debugdump(data, len);
+	return 0;
+}
+
+```
+- ループバックデバイスの実装
+  - 自分自身と通信するための特殊なネットワークデバイス
+    - ループバックデバイスのoutputがそのままループバックデバイスからのinputになる
+    - デバイスドライバのみで完結
+    
+- ループバックデバイスの初期化ルーチン (p72)
+
+```c
+
+struct net_device *
+loopback_init(void)
+{
+	struct net_device *dev;
+    /* メモリ確保 */
+	dev = net_device_alloc();
+	if (!dev) {
+		errorf("net_device_alloc() failure");
+		return NULL;
+	}
+    /* net_device構造体の*devに値を入れる */
+	dev->type = NET_DEVICE_TYPE_LOOPBACK;
+	dev->mtu = LOOPBACK_MTU;
+	dev->flags = NET_DEVICE_FLAG_LOOPBACK;
+	dev->hlen = 0; /* non header */
+	dev->alen = 0; /* non address */
+    /* 制御ルーチンのポインタ(出力ルーチンのみ設定されている) */
+	dev->ops = &loopback_ops;
+	if (net_device_register(dev) == -1) {
+		errorf("net_device_register() failure");
+		return NULL;
+	}
+	infof("success, dev=%s", dev->name);
+	return dev;
+}
+
+```
+
+- ループバックデバイスの出力ルーチン (p74)
+
+```c
+
+static int
+loopback_output(struct net_device *dev, uint16_t type, const uint8_t *data, size_t len, const void *dst)
+{
+	debugf("dev=%s, type=0x%04x, len=%zu", dev->name, type, len);
+	debugdump(data, len);
+    /* ループバックデバイスは引数で渡されたパケットをそのまま入力パケットとして渡す */
+	return net_input(type, data, len, dev);
+}
+
+```
+
+- 実行結果
+
+```bash
+$ ./test/test.exe
+17:38:53.480 [I] setup: setup protocol stack... (test/test.c:35)
+17:38:53.480 [I] net_init: initialize... (net.c:116)
+17:38:53.480 [I] net_init: success (net.c:121)
+17:38:53.480 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:41)
+17:38:53.480 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+17:38:53.480 [I] net_run: startup... (net.c:130)
+17:38:53.480 [I] net_device_open: dev=net0 (net.c:48)
+17:38:53.480 [I] net_run: success (net.c:138)
+17:38:53.480 [D] app_main: press Ctrl+C to terminate (test/test.c:66)
+17:38:53.480 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:84)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+17:38:53.480 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+17:38:53.480 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:108)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+^C17:38:53.859 [D] app_main: terminate (test/test.c:74)
+17:38:53.860 [I] cleanup: cleanup protocol stack... (test/test.c:55)
+17:38:53.860 [I] net_shutdown: shutting down... (net.c:147)
+17:38:53.860 [I] net_device_close: dev=net0 (net.c:66)
+17:38:53.860 [I] net_shutdown: success (net.c:154)
+
+```
+
+### 感想
+- 特に難しいところはなかった。
+- ループバックデバイスの実装でパケットの送受信処理が機能していることを確認できた。
+
+## step 1 2026-04-29
+### 今回やったこと(概要)
+- step 1 (書籍 p45~)
+
+### 学べたこと(具体的な内容)
+- ネットワークデバイス構造体(p50) (net.c)
+
+```c
+
+struct net_device {
+    /* 次のネットワークデバイスのポインタ
+     * 連結リストでネットワークデバイスを管理していて、先頭からリストを走査する
+     * NULLならリストの最後という意味
+     */
+    struct net_device *next;
+    /* ネットワークデバイスを一意に識別する番号、デバイス登録時自動生成 */
+    unsigned int index;
+    /* ネットワークデバイスの名前、デバイス登録時自動生成 */
+    char name[IFNAMSIZ];
+    /* ネットワークデバイスの種別で、NET_DEVICE_TYPE_DUMMY, LOOPBACK, ETHERNETの3つの定数から設定 */
+    uint16_t type;
+    /* ネットワークデバイスが一度に送信できるデータの最大サイズ */
+    uint16_t mtu;
+    /* ネットワークデバイスの特性と状態を表す定数NET_DEVICE_FLAG_UP, LOOPBACK, BROADCAST, P2P, NEED_ARPから設定する */
+    uint16_t flags;
+    /* データリンクのヘッダ長、データリンクのプロトコルにヘッダがないなら0 */
+    uint16_t hlen;
+    /* データリンクのアドレス長、データリンクのプロトコルにアドレスがないなら0 */
+    uint16_t alen;
+    /* ネットワークデバイスのアドレス、定数で16と設定されている。実際のアドレスの長さはalenにある */
+    uint8_t addr[NET_DEVICE_ADDR_LEN];
+    /* データリンクの ブロードキャストアドレス */
+    uint8_t broadcast[NET_DEVICE_ADDR_LEN];
+};
+
+```
+
+ 
+- ネットワークデバイスオブジェクトの割当 (p52)
+
+```c
+
+/* 戻り値はnet_device構造体のポインタ */
+struct net_device *
+net_device_alloc(void)
+{
+	struct net_device *dev;
+    /* net_device構造体の大きさのメモリを確保 */
+	dev = memory_alloc(sizeof(*dev));
+    /* 失敗したらエラー */
+	if (!dev) {
+		errorf("memory_alloc() failure");
+		return NULL;
+	}
+    /* 確保したメモリのアドレスを返す :/
+	return dev;
+}
+
+```
+
+- ネットワークデバイスの登録 (p53)
+
+```c
+
+int
+net_device_register(struct net_device *dev)
+{
+	static unsigned int index = 0;
+    
+    /* インデックス番号を設定したらインデックスをインクリメント */
+	dev->index = index++;
+    /* デバイス名の設定 (net0など) */
+	snprintf(dev->name, sizeof(dev->name), "net%d", dev->index);
+    /* デバイスをリストの先頭に追加、devicesはリストの先頭の意味 */
+	dev->next = devices;
+    /* リストの先頭を更新 */
+	devices = dev;
+	infof("success, dev=%s, type=0x%04x", dev->name, dev->type);
+	return 0;		
+}
+
+```
+
+- ネットワークデバイスの起動 (p54)
+
+```c
+
+static int
+net_device_open(struct net_device *dev)
+{
+	infof("dev=%s", dev->name);
+    /* すでに稼働フラグがセットされているかチェック */
+    /* NET_DEVICE_IS_UP()は論理積を使ってフラグを調べるマクロ */
+	if (NET_DEVICE_IS_UP(dev)) {
+		errorf("already opened, dev=%s", dev->name);
+		return -1;
+	}
+    /* 論理和を使ったフラグ操作。NET_DEVICE_FLAG_UP は0x0001 */
+	dev->flags |= NET_DEVICE_FLAG_UP;
+	return 0;
+}
+
+```
+
+- ネットワークデバイスの停止 (p55)
+
+```c
+
+static int
+net_device_close(struct net_device *dev)
+{
+	infof("dev=%s", dev->name);
+    /* 稼働フラグが設定されていないならエラー */
+	if (!NET_DEVICE_IS_UP(dev)) {
+		errorf("not opened, dev=%s", dev->name);
+		return -1;
+	}
+    /* 論理積を使って稼働フラグを外す */
+	dev->flags &= ~NET_DEVICE_FLAG_UP;
+	return 0;
+}
+
+```
+
+- プロトコルスタックの動作との連動 (p56)
+
+```c
+
+int
+net_run(void)
+{
+	struct net_device *dev;
+
+	infof( "startup...");
+	if (platform_run() == -1) {
+		errorf( "platform_run() failure");
+		return -1;
+	}
+    /* リストを先頭から走査してnet_device_openを実行 */
+	for (dev = devices; dev; dev = dev->next) {
+		net_device_open(dev);
+	}
+	infof( "success");
+	return 0;
+}
+
+int
+net_shutdown(void)
+{
+	struct net_device *dev;
+
+	infof( "shutting down...");
+	if (platform_shutdown() == -1) {
+		warnf( "platform_shutdown() failure");
+	}
+    /* リストを先頭から走査してnet_device_closeを実行 */
+	for (dev = devices; dev; dev = dev->next) {
+		net_device_close(dev);
+	}
+	infof( "success");
+	    return 0;
+}
+```
+
+- ネットワークデバイスへの出力 (p57)
+
+```c
+
+/* ネットワークデバイスからデータを送信する関数 */
+/* type: プロトコル種別
+ * len: 送信データの長さ
+ * data: 送信データのバイト列
+ * dst: データリンク上の宛先アドレス
+ * mtu: 一度に送信できるデータの最大サイズ
+ */
+
+int
+net_device_output(struct net_device *dev, uint16_t type, const uint8_t *data, size_t len, const void *dst)
+{
+	debugf("dev=%s, type=0x%04x, len=%zu", dev->name, type, len);
+	debugdump(data, len);
+    /* ネットワークデバイスが稼働していないならエラー */
+	if (!NET_DEVICE_IS_UP(dev)) {
+		errorf("not opened, dev=%s", dev->name);
+		return -1;
+	}
+    /* mtuよりも送信データの長さが長いならエラー */
+	if (dev->mtu < len) {
+		errorf("too long, dev=%s, mtu=%u, len=%zu", dev->name, dev->mtu, len);
+		return -1;
+	}
+	return 0;
+}
+
+```
+
+- テスト用ダミーデバイスの登録 (p58)
+
+```c
+
+struct net_device *
+dummy_init(void)
+{
+	struct net_device *dev;
+	dev = net_device_alloc();
+	if (!dev) {
+		errorf("net_device_alloc() failure");
+		return NULL;
+	}
+    /* ダミーデータの登録 */
+	dev->type = NET_DEVICE_TYPE_DUMMY;
+	dev->mtu = 128;
+	dev->hlen = 0; /* no header */
+	dev->alen = 0; /* no address */
+	if (net_device_register(dev) == -1) {
+		errorf("net_device_register() failure");
+		return NULL;
+	}
+	infof("success, dev=%s", dev->name);
+    /* net_device構造体のポインタを返す */
+	return dev;
+}
+
+```
+
+- setup()を修正したが省略 (p59)
+  -  dev = dummy_init(); の追加、エラーチェックを追加
+
+- app_mainのwhile内にnet_device_output()を追加 (p60)
+  - 以下はapp_main内の修正部分
+
+```c
+
+	while (!terminate) {
+        /* テストデータを送信する。宛先アドレスはNULL */
+		if (net_device_output(dev, 0x0800, test_data, sizeof(test_data), NULL) == -1) {
+			errorf("net_device_output() failure");
+			break;
+		}
+		sleep(1);
+	}
+
+```
+
+- 実行結果
+```bash
+$ ./test.exe
+20:26:53.068 [I] setup: setup protocol stack... (test/test.c:54)
+20:26:53.068 [I] net_init: initialize... (net.c:88)
+20:26:53.068 [I] net_init: success (net.c:93)
+20:26:53.068 [I] net_device_register: success, dev=net0, type=0x0000 (net.c:41)
+20:26:53.068 [I] dummy_init: success, dev=net0 (test/test.c:33)
+20:26:53.068 [I] net_run: startup... (net.c:102)
+20:26:53.068 [I] net_device_open: dev=net0 (net.c:48)
+20:26:53.068 [I] net_run: success (net.c:110)
+20:26:53.068 [D] app_main: press Ctrl+C to terminate (test/test.c:85)
+20:26:53.068 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:72)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+20:26:54.069 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:72)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+^C20:26:54.664 [D] app_main: terminate (test/test.c:93)
+20:26:54.664 [I] cleanup: cleanup protocol stack... (test/test.c:74)
+20:26:54.664 [I] net_shutdown: shutting down... (net.c:119)
+20:26:54.664 [I] net_device_close: dev=net0 (net.c:60)
+20:26:54.664 [I] net_shutdown: success (net.c:126)
+
+```
+
+### 感想
+- 定数と論理和を使ったフラグ操作は自分で使ったことがないので取り入れたい。
+- 全ての修正コードを書いていくと長すぎるので、次回から重要なロジックや新しく学んだ概念などに絞ってここに書いていくことにする。
 
 ## Appendix 3 2026-04-28
 ### 今回やったこと(概要)
