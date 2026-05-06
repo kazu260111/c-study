@@ -14,6 +14,380 @@
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
 
+## step 5 2026-05-06
+### 今回やったこと(概要)
+- step 5 (書籍 p113~)
+  - 論理インターフェース
+
+### 学べたこと(具体的な内容)
+- 論理インターフェース
+  - IPアドレスのような論理アドレスをもつ
+     - ネットワークデバイスに紐付ける(複数可能にする)
+
+- インターフェース構造体 (p118)
+
+```c
+
+struct net_iface {
+    /* インターフェースをつなげてリストとして管理 */
+    struct net_iface *next;
+    /* 紐付いたネットワークデバイスへのポインタ */
+    struct net_device *dev; /* back pointer to parent */
+    /* 
+     * familyはIPv4かIPv6なのかといった、どのプロトコルのためのインターフェースかを示す定数
+     * ファミリ(プロトコルの種類)に依存したアドレス等のデータは別の構造体で定義する 
+     * (あくまでnet_iface構造体は汎用的なものにする)
+     */
+    int family;
+    /* depends on implementation of protocols. */
+};
+
+```
+
+- ネットワークデバイスとインターフェースを紐付ける(p120)
+
+```c
+
+int
+net_device_add_iface(struct net_device *dev, struct net_iface *iface)
+{
+	struct net_iface *entry;
+    /* インターフェースのリストを走査する */
+	for (entry = dev->ifaces; entry; entry = entry->next) {
+		if (entry->family == iface->family) {
+			/*
+			 * NOTE: For simplicity, only one iface can be added per family.
+			 */
+			return -1;
+		}
+	}
+    /* リストの先頭に追加 */
+	iface->next = dev->ifaces;
+    /* 各値を入れる */
+	iface->dev = dev;
+	dev->ifaces = iface;
+	infof("success, dev=%s", dev->name);
+	return 0;
+}
+
+```
+
+### つまづいたこと・難しかったこと(引っかかったところや疑問に思ったこと)
+
+
+### 解決した方法(自力での試行錯誤や調べた内容)
+
+
+### 感想
+
+
+#### メモ(本筋から外れた、あるいは重要度の低い内容)
+## step 4 2026-05-05
+### 今回やったこと(概要)
+- step 4 (書籍 p91~)
+  - IPパケットの入力と検証
+
+### 学べたこと(具体的な内容)
+#### IPパケット
+- データリンクはそれぞれ違った仕様をもつが、IPはデータリンクの特性の違いを吸収して抽象化できる
+- 論理アドレス
+  - IPアドレスはデータリンクに依存しないので、TCP/IP上の全てのノードを一意に識別できる
+- パケット分割
+  - IPはデータリンクによるMTU（ネットワークデバイスから一度に送信できるデータの最大サイズ)の違いを吸収するために、IPパケットを分割する仕組みをもつ
+  - 分割されたパケットはパケットの受け取りノードでIPヘッダの情報から復元される
+    
+#### IPパケットの構造 
+- IPパケットはヘッダとペイロード(データ部分)に分かれている。
+
+- ヘッダ
+  - バージョン(4bit)
+    - IPのバージョン。IPv4なら「4」
+  - ヘッダ長(4bit)
+    - IPヘッダの長さ。4バイト単位(実際の値を4で割ったもの)で設定される。(IPヘッダの長さは必ず4の倍数)
+  - サービス種別(8bit)
+    - IPパケットの優先度などを指定する。(あまり使われないので今回のプロジェクトでは0)
+  - データグラム全長(16bit)
+    - IPパケット全体の長さ。1バイト単位で値を設定。
+  - 識別子(16bit)
+    - IPパケットを識別するためのID。送信元がIPパケットごとに異なる値を設定。分割されたパケットは同じIDを共有。識別子から元のパケットを復元する。
+  - フラグ(3bit)
+    - IPパケットが分割できるかを表す。1ビット目は常に0。2ビット目は1なら分割できないパケット。3ビット目は1ならこれは分割されたパケットで、続きのパケットがあることを表す。
+  - フラグメント・オフセット(13bit)
+    - 分割されたIPパケットのどの部分にあたるかを表す。(8バイト単位)
+    - 分割されてないパケットまたは最初のパケット断片なら0に設定。
+  - 生存時間(8bit)
+    - TTL。実際は中継可能回数を表し、IPパケットがルータなどにより中継される度にデクリメントされ、0になるとパケットが破棄される。
+  - プロトコル番号(8bit)
+    - ペイロードのデータのプロトコルを示す番号で、IANAによって番号が管理されている。/etc/protocolsでプロトコルと番号の対応表が見られる。
+  - ヘッダ・チェックサム(16bit)
+    - IPヘッダのチェックサムであることに注意。(IP全体ではない)
+  - 送信元アドレス(32bit)
+  - 宛先アドレス(32bit)
+  - オプション(可変長)
+    - IPヘッダにオプションをつけることができる。(実際の通信ではあまり使われない) 
+    - IPヘッダの長さは4の倍数である必要がある(ヘッダ長を設定するフィールドは4バイト単位)ので、必要ならパディング(詰めもの)を入れてバイト数を調整する。
+  
+- バイトオーダー (p96)
+  - ネットワークに複数バイトの数値データを送るときは原則ビッグエンディアンにするというルールがある(このあたりは「独習アセンブラ」の書籍で読んだことがあるので省略した)
+- チェックサムの計算(p97)
+   - IPヘッダの16ビットごとの値を足して、桁あふれ分はすべて下位のビットに足す。(数学のmodのイメージ)
+   - 計算した値をビット反転し、チェックサムに入れて送信。
+   - 受信側は同様にIPヘッダの値とチェックサムの値を足し合わせた後、桁あふれ分を下位ビットに足す。それをビット反転して0になったら検証成功。
+  
+#### コード
+- IPヘッダ構造体 (p103) (ip.h)
+  - 一部のヘッダのフィールド(ビット数が少ないもの)はまとめられている
+
+```c
+
+struct ip_hdr {
+    uint8_t vhl;  /* IPバージョン(4bit)とヘッダ長(4bit) */
+    uint8_t tos;  /* サービス種別(8bit)、0が入る */
+    uint16_t total;  /* データグラム全長(16bit) */
+    uint16_t id;  /* 識別子(16bit) */
+    uint16_t offset;  /* フラグ(3bit)とフラグメントオフセット(13bit) */
+    uint8_t ttl;  /* 生存時間(8bit) */
+    uint8_t protocol;  /* プロトコル番号(8bit) */
+    uint16_t sum;  /* ヘッダチェックサム(16bit) */
+    ip_addr_t src;  /* 送信元アドレス(32bit) */
+    ip_addr_t dst;  /* 宛先アドレス(32bit) */
+};
+
+```
+
+- 文字列からバイナリへ変換する関数 (p104)
+  - IPアドレスをバイナリとしてネットワークバイトオーダー(ビックエンディアン)で格納する
+```c
+
+/* 引数: *p - IPアドレスの文字列  *n - 変換した後のバイナリを入れるバッファ */
+int
+ip_addr_pton(const char *p, ip_addr_t *n)
+{
+    char *sp, *ep;
+    /* オクテットの番号(0~3) */
+    int idx;
+    /* 変換したIPアドレスのオクテットを一時的に受け取る */
+    long ret;
+
+    sp = (char *)p;
+    for (idx = 0; idx < 4; idx++) {
+        /* IPアドレスの文字列をlongに変換し、読み取れないドット(.)をepに入れる */
+        ret = strtol(sp, &ep, 10);
+        /* 読み取る数字はは0~255の範囲のはずなので、違うならエラー */
+        if (ret < 0 || ret > 255) {
+            return -1;
+        }
+        /* 数字が読み取れないならエラー */
+        if (ep == sp) {
+            return -1;
+        }
+        /* ドットまたは終端文字が適切でないならエラー */
+        if ((idx == 3 && *ep != '\0') || (idx != 3 && *ep != '.')) {
+            return -1;
+        }
+        /* nをip_addr_t(これはuint32_tと同じ)型からuint8_t型にキャストする。
+         * これによりnをuint32_t型の変数1個ではなくuint8_t型の配列のポインタとみなすことで、
+         * 1バイトずつret内のオクテットを書き込むことができる。
+         * (n[0]は第一オクテット、n[1]は第二オクテットという風に扱える。)
+         */
+        ((uint8_t *)n)[idx] = ret;
+        sp = ep + 1;  /* ドットの次にspを移動させ、次のオクテットを読めるようにする */
+    }
+    return 0;
+}
+
+```
+
+- ip_print関数 (p106)
+
+```c
+
+static void
+ip_print(const uint8_t *data, size_t len)
+{
+    /* IPヘッダのポインタ */
+	struct ip_hdr *hdr;
+    /* IPヘッダの各フィールドの変数を定義 */
+	uint8_t v, hl, hlen;
+	uint16_t total, offset;
+	char addr[IP_ADDR_STR_LEN];
+    
+    /* 途中で他の出力が混ざらないようにする */
+	flockfile(stderr);
+    /* 受け取ったデータをstruct ip_hdr構造体として扱う */
+	hdr = (struct ip_hdr *)data;
+    /* バージョンはvhlを右に4ビット移動させれば良い(構造体の定義を参照) */
+	v = hdr->vhl >> 4;
+    /* 0x0fとの論理積で上位ビットを取り除き、ヘッダ長を得る */
+	hl = hdr->vhl & 0x0f;
+    /* 4バイト単位なので実際の数値を得るために4倍 = 2^2 = 2ビット左に移動すれば良い */
+	hlen = hl << 2;
+	fprintf(stderr, "	  vhl: 0x%02x [v: %u, hl: %u (%u)]\n", hdr->vhl, v, hl, hlen);
+	fprintf(stderr, "	  tos: 0x%02x\n", hdr->tos);
+    /* ntoh16()で多バイト長の数値のバイトオーダーの変換をする */
+	total = ntoh16(hdr->total);
+	fprintf(stderr, "	total: %u (payload: %u)\n", total, total - hlen);
+	fprintf(stderr, "	   id: %u\n", ntoh16(hdr->id));
+	offset = ntoh16(hdr->offset);
+    /* オフセットの上位3ビットと下位13ビットをそれぞれ取り出す */
+	fprintf(stderr, "      offset: 0x%04x [flags=%x, offset=%u]\n",
+		offset, offset >> 13, offset & IP_HDR_OFFSET_MASK);
+	fprintf(stderr, "	  ttl: %u\n", hdr->ttl);
+	fprintf(stderr, "    protocol: %u\n", hdr->protocol);
+	fprintf(stderr, "	  sum: 0x%04x\n", ntoh16(hdr->sum));
+    /* IPアドレスのバイナリ(ネットワークバイトオーダー)を文字列に変換 */
+	fprintf(stderr, "	  src: %s\n", ip_addr_ntop(hdr->src, addr, sizeof(addr)));
+	fprintf(stderr, "	  dst: %s\n", ip_addr_ntop(hdr->dst, addr, sizeof(addr)));
+/* デバック用 */
+#ifdef HEXDUMP
+	hexdump(stderr, data, len);
+#endif
+    /* flockfileの解除 */
+	funlockfile(stderr);
+}
+```
+
+- IPヘッダの検証 (p108)
+
+```c
+
+static void
+ip_input(const uint8_t *data, size_t len, struct net_device *dev)
+{
+	/* IPヘッダのポインタ */
+	struct ip_hdr *hdr;
+    /* バージョン */
+	uint8_t v;
+    /* ヘッダの長さ、合計サイズ、オフセット */
+	uint16_t hlen, total, offset;
+
+	debugf("dev=%s, len=%zu", dev->name, len);
+    /* IPヘッダの最小サイズは20バイトなので、これを下回るならエラー */
+	if (len < IP_HDR_SIZE_MIN) {
+		errorf("too short");
+		return;
+	}
+    /* データを型変換して構造体として扱う */
+	hdr = (struct ip_hdr *) data;
+    /* ビット操作してバージョンの情報を取り出す */
+	v = hdr->vhl >> 4;
+    /* IPv4か確認 */
+	if (v != IP_VERSION_IPV4) {
+		errorf("ip version error: v=%u", v);
+		return;
+	}
+    /* 上位ビットを取り出したあと、4倍する */
+	hlen = (hdr->vhl & 0x0f) << 2;
+	if (len < hlen) {
+		errorf("header length error: len=%zu < hlen=%u", len, hlen);
+		return;
+	}
+    /* チェックサムの計算(IPヘッダだけで計算するのでペイロードのデータは不要) */
+	if (cksum16((uint16_t *)hdr, hlen, 0) != 0) {
+		errorf("checksum error");
+		return;
+	}
+	total = ntoh16(hdr->total);
+	if (len < total) {
+		errorf("total length error: len=%zu < total=%u", len, total);
+		return;
+	}
+	offset = ntoh16(hdr->offset);
+    /* IPパケットが分割されていたらエラー(このプロジェクトではサポートしない) */
+    /* IP_HDR_FLAG_MF(0x2000)との論理積を計算する。MFフラグが設定(後続のフラグメントがある)なら条件式の左側は0ではなくなる。
+     * さらに、右側でIP_HDR_OFFSET_MASK(0x1FFF)で下位13ビット(フラグメントオフセット)を取り出し、それが0でないか確認する。
+     */
+	if (offset & IP_HDR_FLAG_MF || offset & IP_HDR_OFFSET_MASK) {
+		errorf("fragments do not support");
+		return;
+	}
+	ip_print(data, total);
+}
+
+```
+
+- 実行結果
+```bash
+
+$ ./test/test.exe 2>&1 | tee -i step4_test.txt
+19:14:59.516 [I] setup: setup protocol stack... (test/test.c:35)
+19:14:59.516 [I] net_init: initialize... (net.c:159)
+19:14:59.516 [I] net_protocol_register: success, type=0x0800 (net.c:135)
+19:14:59.516 [I] net_init: success (net.c:168)
+19:14:59.516 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:49)
+19:14:59.516 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+19:14:59.516 [I] net_run: startup... (net.c:177)
+19:14:59.516 [I] net_device_open: dev=net0 (net.c:56)
+19:14:59.516 [I] net_run: success (net.c:185)
+19:14:59.516 [D] app_main: press Ctrl+C to terminate (test/test.c:66)
+19:14:59.516 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
+19:14:59.516 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+19:14:59.516 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:144)
+19:14:59.516 [D] ip_input: dev=net0, len=48 (ip.c:93)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 128
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xbd4a
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+19:15:00.516 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
+19:15:00.516 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+19:15:00.516 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:144)
+19:15:00.516 [D] ip_input: dev=net0, len=48 (ip.c:93)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 128
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xbd4a
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+19:15:01.519 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
+19:15:01.519 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+19:15:01.519 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:144)
+19:15:01.519 [D] ip_input: dev=net0, len=48 (ip.c:93)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 128
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xbd4a
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+19:15:01.908 [D] app_main: terminate (test/test.c:74)
+19:15:01.908 [I] cleanup: cleanup protocol stack... (test/test.c:55)
+19:15:01.908 [I] net_shutdown: shutting down... (net.c:194)
+19:15:01.908 [I] net_device_close: dev=net0 (net.c:74)
+19:15:01.908 [I] net_shutdown: success (net.c:201)
+```
+### 感想
+- IPパケットの仕様はテキストを読んで多少知っていたが、実際に自分で直接扱うと解像度が上がって勉強になった。
+  - ヘッダ長やフラグメントオフセットが4バイトまたは8バイト単位なのはそのうち忘れそうなので気をつけるようにしたい。
+- ビット演算を使って特定の情報を取り出す方法は動作が軽く便利なので、パフォーマンスを求めるときは積極的に使うようにしたい。
+
 ## step 3 2026-05-01
 ### 今回やったこと(概要)
 - step 3 (書籍 p79~)
@@ -45,16 +419,187 @@ struct net_protocol {
 
 ```
 
-### つまづいたこと・難しかったこと(引っかかったところや疑問に思ったこと)
+- プロトコルの登録 (p84)
 
+```c
 
-### 解決した方法(自力での試行錯誤や調べた内容)
+int
+net_protocol_register(uint16_t type, net_protocol_handler_t handler)
+{
+	struct net_protocol *proto;
+    /* 同じプロトコルがすでに登録されていないかチェック */
+	for (proto = protocols; proto; proto = proto->next) {
+		if (type == proto->type) {
+			errorf("already registered, type0x%04x", proto->type);
+			return -1;
+		}
+	}
+    /* メモリ確保 */
+	proto = memory_alloc(sizeof(*proto));
+       	if (!proto) {
+		errorf("memory_alloc() failure");
+		return -1;
+	}
+    /* 各フィールド(メンバ)に代入 */
+	proto->type = type;
+	proto->handler = handler;
+    /* プロトコルのリストの先頭に新しいプロトコルを追加 */
+	proto->next = protocols;
+	protocols = proto;
+	infof("success, type=0x%04x", type);
+	return 0;
+}
 
+```
+
+- 受け取ったパケットの振り分け (p86)
+
+```c
+
+int
+net_input(uint16_t type, const uint8_t *data, size_t len, struct net_device *dev)
+{
+	struct net_protocol *proto;
+    /* 省略 */
+    /* 一致するプロトコルをプロトコルのリストから探す */
+	for (proto = protocols; proto; proto = proto->next) {
+        /* 見つかったらハンドラを起動 */
+		if (proto->type == type) {
+			proto->handler(data, len, dev);
+			return 0;
+		}
+	}
+	/* unsupported protocol */
+	return 0;
+}
+
+```
+- IPモジュールの実装(p86)(ip.c)
+  - 今の段階ではプロトコルの登録と入力ハンドラの呼び出しの確認用
+
+- 初期化関数(p86)
+```c
+
+int
+ip_init(void)
+{
+    /* プロトコルスタックにプロトコルの種類と入力ハンドラを登録する */
+	if (net_protocol_register(NET_PROTOCOL_TYPE_IP, ip_input) == -1) {
+		errorf("net_protocol_register() failure");
+		return -1;
+	}
+	return 0;
+
+```
+
+- 入力ハンドラの準備 (p87)
+
+```c
+
+static void
+ip_input(const uint8_t *data, size_t len, struct net_device *dev)
+{
+	debugf("dev=%s, len=%zu", dev->name, len);
+	debugdump(data, len);
+}
+
+```
+
+- 初期化関数の呼び出し (p87)
+
+```c
+
+int
+net_init(void)
+{
+    /* 省略 */
+    /* ip_initを起動する */
+	if (ip_init() == -1) {
+		errorf("ip_init() failure");
+		return -1;
+	}
+    /* 省略 */
+}
+
+```
+
+- テストプログラムを微修正(プロトコル種別の定数を設定)して実行した結果
+
+```bash
+$ ./test/test.exe 2>&1 | tee -i step3_test.txt
+22:12:31.363 [I] setup: setup protocol stack... (test/test.c:35)
+22:12:31.363 [I] net_init: initialize... (net.c:159)
+22:12:31.363 [I] net_protocol_register: success, type=0x0800 (net.c:135)
+22:12:31.363 [I] net_init: success (net.c:168)
+22:12:31.363 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:49)
+22:12:31.363 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+22:12:31.363 [I] net_run: startup... (net.c:177)
+22:12:31.363 [I] net_device_open: dev=net0 (net.c:56)
+22:12:31.363 [I] net_run: success (net.c:185)
+22:12:31.363 [D] app_main: press Ctrl+C to terminate (test/test.c:66)
+22:12:31.363 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+22:12:31.363 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+22:12:31.363 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:144)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+22:12:31.363 [D] ip_input: dev=net0, len=48 (ip.c:11)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+22:12:32.364 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+22:12:32.364 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+22:12:32.364 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:144)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+22:12:32.364 [D] ip_input: dev=net0, len=48 (ip.c:11)
++------+-------------------------------------------------+------------------+
+| 0000 | 45 00 00 30 00 80 00 00 ff 01 bd 4a 7f 00 00 01 | E..0.......J.... |
+| 0010 | 7f 00 00 01 08 00 35 64 00 80 00 01 31 32 33 34 | ......5d....1234 |
+| 0020 | 35 36 37 38 39 30 21 40 23 24 25 5e 26 2a 28 29 | 567890!@#$%^&*() |
++------+-------------------------------------------------+------------------+
+^C22:12:33.182 [D] app_main: terminate (test/test.c:74)
+22:12:33.182 [I] cleanup: cleanup protocol stack... (test/test.c:55)
+22:12:33.182 [I] net_shutdown: shutting down... (net.c:194)
+22:12:33.182 [I] net_device_close: dev=net0 (net.c:74)
+22:12:33.182 [I] net_shutdown: success (net.c:201)
+```
 
 ### 感想
-
+- コード自体は特に難しくなかった。
+- いろいろなプロトコルに対応できるよう、将来性を考えた仕様にしておくとよいとわかった。
 
 #### メモ(本筋から外れた、あるいは重要度の低い内容)
+- teeコマンドを使うと、ctrl+cを押したら最後の終了ログが出なくなってしまった。
+  - -iオプションを付けることでteeでログを保存しつつ終了ログが出るようになった。
+
 ## step 2 2026-04-30
 ### 今回やったこと(概要)
 - step 2 (書籍 p63~)
@@ -77,7 +622,7 @@ struct net_protocol {
  
 - struct net_device_ops
   - デバイス固有の処理を行う関数のアドレスを格納する構造体
-    ポリモーフィズムを実現する(共通のインターフェースで操作できるようにする)
+    共通のインターフェースで操作できるようにする
   - ３つの関数ポインタ(open, close, output)をもつ
 
 - 制御ルーチンの呼び出し(p69)
@@ -714,14 +1259,14 @@ tasks_del(struct sched_task *task)
 
 ```
 
-- タスクの起床 (p600)
+- タスクの再開 (p600)
 
 ```c
 
 int
 sched_task_wakeup(struct sched_task *task)
 {
-    /* 休止タスクを全て起こす */
+    /* 休止タスクを全て再開する */
     return pthread_cond_broadcast(&task->cond);
 }
 
@@ -1031,7 +1576,7 @@ intr_register(unsigned int irq, intr_isr_t isr, int flags, void *arg)
 }
 
 ```
-- 割り込み機構の実装(p580) /platform/linux/intr.cの一部
+- 割り込み機構の初期化関数(p580) /platform/linux/intr.cの一部
 
 ```c
 static pthread_t tid;  /* スレッドID */
