@@ -72,16 +72,225 @@ net_device_add_iface(struct net_device *dev, struct net_iface *iface)
 
 ```
 
-### つまづいたこと・難しかったこと(引っかかったところや疑問に思ったこと)
+- ネットワークデバイスに紐付けられたインターフェースを取得する(p112)
+
+```c
+
+struct net_iface *
+net_device_get_iface(struct net_device *dev, int family)
+{
+	struct net_iface *entry;
+	/* インターフェースのリストを先頭から走査する */
+	for (entry = dev->ifaces; entry; entry = entry->next) {
+		if (entry->family == family) {
+			break;
+		}
+	}
+	return entry;
+}
+
+```
+
+- IPインターフェース構造体(p123)
+
+```c
+
+struct ip_iface {
+    /*
+     * 先頭にnet_iface構造体を配置することで、(struct net_iface *)型に
+     * キャストしたとき、net_ifaceの部分だけがピックアップされる。
+     * 直接net_ifaceが扱えるようになるので、汎用的なインターフェース構造体
+     * として使えるようになる。
+     */
+    struct net_iface iface;
+    struct ip_iface *next;
+    ip_addr_t unicast;
+    ip_addr_t netmask;
+    ip_addr_t broadcast;
+};
+
+```
+
+- IPインターフェースの割当 (p124)
+
+```c
+
+struct ip_iface *
+ip_iface_alloc(const char *unicast, const char *netmask)
+{
+	struct ip_iface *iface;
+    /* メモリ確保 */
+	iface = memory_alloc(sizeof(*iface));
+	if (!iface) {
+		errorf("memory_alloc() failure");
+		return NULL;
+	}
+    /* 
+     * NET_IFACEはマクロで、(struct net_iface *)でキャストしている。
+     * これによってip_iface構造体の最初のフィールド(struct net_iface iface)
+     * だけがピックアップされる形になる。
+     */
+	NET_IFACE(iface)->family = NET_IFACE_FAMILY_IP;
+    /* 文字列からネットワークバイトオーダーのバイナリに変換 */
+	if (ip_addr_pton(unicast, &iface->unicast) == -1) {
+		errorf("ip_addr_pton() failure, addr=%s", unicast);
+		memory_free(iface);
+		return NULL;
+	}
+	if (ip_addr_pton(netmask, &iface->netmask) == -1) {
+		errorf("ip_addr_pton() failure, addr=%s", netmask);
+		memory_free(iface);
+		return NULL;
+	}
+    /*
+     * ブロードキャストアドレスの計算をする。
+     * ユニキャストアドレスとサブネットマスクの論理積を計算すると、
+     * ネットワーク部だけが残る。これとサブネットマスクのビット反転
+     * との論理和を計算すると、ちょうどホスト部がすべて1になって
+     * ブロードキャストアドレスになる。
+     */
+	iface->broadcast = (iface->unicast & iface->netmask) | ~iface->netmask;
+	return iface;
+}
+
+```
+
+- IPインターフェースを登録する (p126)
+
+```c
+
+/*
+ * NOTE: must not be call after net_run()
+ */
+int
+ip_iface_register(struct net_device *dev, struct ip_iface *iface)
+{
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[IP_ADDR_STR_LEN];
+	char addr3[IP_ADDR_STR_LEN];
+    
+    /* ユニキャストIP、サブネットマスク、ブロードキャストIPをバイナリから文字列に変換 */ 
+	infof("dev=%s, %s, %s, %s", dev->name,      
+        ip_addr_ntop(iface->unicast, addr1, sizeof(addr1)),
+	    ip_addr_ntop(iface->netmask, addr2, sizeof(addr2)),
+	    ip_addr_ntop(iface->broadcast, addr3, sizeof(addr3)));
+    /* 第二引数はNET_IFACEでキャストすることで汎用的なインターフェース構造体になっている */
+	if (net_device_add_iface(dev, NET_IFACE(iface)) == -1) {
+		errorf("net_device_add_iface() failure");
+		return -1;
+	    }
+    /* リストの先頭に追加 */
+	iface->next = ifaces;
+	ifaces = iface;
+	return 0;
+}
+
+```
+
+- struct ip_iface * 
+  ip_iface_select(ip_addr_t addr)    (p127)
+   - 登録しているIPインターフェースを操作して引数 のIPと一致する
+     ユニキャストIPアドレスが設定されたIPインターフェースを見つけて返す。(省略)
 
 
-### 解決した方法(自力での試行錯誤や調べた内容)
+- IPパケットのフィルタリングをする (p128)
+  - 自分宛てのパケットやブロードキャストのパケットを区別する
 
+```c
+
+static void
+ip_input(const uint8_t *data, size_t len, struct net_device *dev)
+{
+    /* 省略 */
+	struct ip_iface *iface;
+	char addr[IP_ADDR_STR_LEN];
+    /* 省略 */
+    /* 
+     * net_device_get_ifaceの戻り値はstruct net_ifaceという汎用的なインターフェース構造体
+     * だが、これはもともとstruct ip_ifaceからキャストして来た一部なので、もう一度
+     * 元のstruct ip_ifaceに戻してip_iface固有の情報にアクセスできる。(ダウンキャスト)
+     */
+	iface = (struct ip_iface *)net_device_get_iface(dev, NET_IFACE_FAMILY_IP);
+	if (!iface) {
+		/* ignore */
+		return;
+	}
+    /* ユニキャストアドレスかブロードキャストアドレスに一致するか確認 */
+	if (hdr->dst != iface->unicast) {
+		if (hdr->dst != iface->broadcast && hdr->dst != IP_ADDR_BROADCAST) {
+			/* ignore: for other host */
+			return;
+		}
+	}
+	debugf("permit, dev=%s, iface=%s", dev->name, ip_addr_ntop(iface->unicast, addr, sizeof(addr)));
+	ip_print(data, total);
+}
+
+```
+
+- テストプログラムを変更してビルドした。(p129)
+  - 省略
+
+- 実験結果
+
+```bash
+$ ./test/test.exe 2>&1 | tee -i step5_test.txt
+19:02:02.802 [I] setup: setup protocol stack... (test/test.c:37)
+19:02:02.803 [I] net_init: initialize... (net.c:195)
+19:02:02.803 [I] net_protocol_register: success, type=0x0800 (net.c:171)
+19:02:02.803 [I] net_init: success (net.c:204)
+19:02:02.803 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:49)
+19:02:02.803 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+19:02:02.803 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:97)
+19:02:02.803 [I] net_device_add_iface: success, dev=net0 (net.c:132)
+19:02:02.803 [I] net_run: startup... (net.c:213)
+19:02:02.803 [I] net_device_open: dev=net0 (net.c:56)
+19:02:02.803 [I] net_run: success (net.c:221)
+19:02:02.803 [D] app_main: press Ctrl+C to terminate (test/test.c:77)
+19:02:02.803 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
+19:02:02.803 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
+19:02:02.803 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:180)
+19:02:02.803 [D] ip_input: dev=net0, len=48 (ip.c:164)
+19:02:02.803 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:205)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 128
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xbd4a
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+19:02:03.804 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
+19:02:03.804 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
+19:02:03.804 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:180)
+19:02:03.804 [D] ip_input: dev=net0, len=48 (ip.c:164)
+19:02:03.804 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:205)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 128
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xbd4a
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+19:02:04.148 [D] app_main: terminate (test/test.c:85)
+19:02:04.148 [I] cleanup: cleanup protocol stack... (test/test.c:66)
+19:02:04.148 [I] net_shutdown: shutting down... (net.c:230)
+19:02:04.148 [I] net_device_close: dev=net0 (net.c:74)
+19:02:04.148 [I] net_shutdown: success (net.c:237)
+```
 
 ### 感想
+- IPアドレスの仕様について詳しく知らなかったので、今回「マスタリングTCP/IP 入門編」を読みながら
+  IPアドレスの基本を学んだ。サブネットマスクが生まれた経緯も書いてあったので(同書p155)、
+  仕組みを覚えるのに役立った。
+- ダウンキャストの部分が少し難しかったが、何度か読んだりLLMを使ったりして理解できた。
+  - 他の言語でもある概念らしいのでここで理解できてよかった。
 
-
-#### メモ(本筋から外れた、あるいは重要度の低い内容)
 ## step 4 2026-05-05
 ### 今回やったこと(概要)
 - step 4 (書籍 p91~)
