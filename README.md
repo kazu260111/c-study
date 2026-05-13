@@ -77,11 +77,14 @@ Pythonについて学んだことをまとめる。
     - 出版社：オライリー・ジャパン
 
 ### [TCP-IP](./TCP-IP)
-- **ゼロからのTCP/IPプロトコルスタック自作入門**
-  - 著者：山本　雄也
-  - 出版社：マイナビ出版
-  - 備考：[forkした別リポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて学習中
-  - [学習メモ](./TCP-IP/microps_study_log.md)
+書籍の内容に従ってTCP/IPプロトコルスタックを自作する。
+[学習メモ](./TCP-IP/microps_study_log.md)にて学習記録をまとめている。
+[forkした別リポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にてプログラムを作成中。
+
+- 参考書籍
+  - **ゼロからのTCP/IPプロトコルスタック自作入門**
+    - 著者：山本　雄也
+    - 出版社：マイナビ出版
 
 ## 追加予定のディレクトリ
 ### Rust-study
