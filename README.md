@@ -16,6 +16,9 @@
 - Shell: GNU bash 5.2.21 
 - Python: 3.12.3
 
+## ライセンスについて
+LICENSEファイルが各ディレクトリにあるのでそちらをご確認ください。
+
 ## 各ディレクトリの概要
 ### [Linux-kernel](./Linux-kernel)
 Linuxカーネルについて学んだことをまとめる。
