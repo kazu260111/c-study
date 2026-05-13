@@ -14,6 +14,248 @@
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
 
+## step 6 2026-05-13
+### 今回やったこと(概要)
+- step 6 (書籍 p133~)
+  - IPパケットの送信
+    - ルーティングやアドレス解決はまだ実装しない
+
+- IPモジュールの送信 (p136)
+  - 上位のプロトコルから送信データを受ける関数
+
+```c
+
+ssize_t
+ip_output(uint8_t protocol, const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst)
+{
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[IP_ADDR_STR_LEN];
+	struct ip_iface *iface;
+	uint16_t id;
+    /* パケットの長さ */
+	ssize_t plen;
+    /* ip_build_packet()で使う、IPパケットを入れる入れ物 */
+	uint8_t buf[IP_TOTAL_SIZE_MAX];
+	
+    /* バイトオーダー変換 */
+	ip_addr_ntop(src, addr1, sizeof(addr1));
+	ip_addr_ntop(dst, addr2, sizeof(addr2));
+	debugf("%s => %s, protocol=%d, len=%zu", addr1, addr2, protocol, len);
+    /* ルーティングはまだ未実装(エラー) */
+    /* IP_ADDR_ANYはIPアドレスが指定されていない状態 */
+	if (src == IP_ADDR_ANY) {
+		errorf("ip routing does not implement");
+		return -1;
+	}
+    /* srcをもつインターフェースの検索 */
+	iface = ip_iface_select(src);
+	if (!iface) {
+		errorf("iface not found, src=%s", addr1);
+		return -1;
+	}
+    /*
+     * 現段階ではIPパケットは同じネットワーク内に送る必要があるので、
+     * サブネットマスクを利用して宛先アドレスと送信元アドレスのネットワーク部を
+     * 比較し、一致しなければ届かないのでエラー。(ブロードキャスト通信ならOK)
+     */
+	if ((dst & iface->netmask) != (iface->unicast & iface->netmask) && dst != IP_ADDR_BROADCAST) {
+		errorf("not reached, dst=%s", addr2);
+		return -1;
+	}
+    /* MTU(最大転送データサイズ)とIPパケットのサイズを比較(IPオプションは使わないのでヘッダサイズは常に最小) */ 
+    /* このプロジェクトではフラグメントは行わない */
+	if (NET_IFACE(iface)->dev->mtu < IP_HDR_SIZE_MIN + len) {
+		errorf("too long, dev=%s, mtu=%u < %zu", 
+		    NET_IFACE(iface)->dev->name, NET_IFACE(iface)->dev->mtu, IP_HDR_SIZE_MIN + len);
+		return -1;
+	}
+    /* IDをランダムに設定 */
+	id = random16();
+    /* IPパケットを構築し、戻り値としてIPパケットの長さを返す */
+	plen = ip_build_packet(protocol, data, len, id, 0, iface->unicast, dst, buf, sizeof(buf));
+	if (plen == -1) {
+		errorf("ip_build_packet() failure");
+		return -1;
+	}
+    /* IPパケットの送信 */
+	if (ip_output_device(iface, buf, plen, dst) == -1) {
+		errorf("ip_output_device() failure");
+		return -1;
+	}
+	return plen;
+}
+
+```
+
+- IPパケットの組み立て (p139)
+
+```c
+
+static ssize_t
+ip_build_packet(uint8_t protocol, const uint8_t *data, size_t len, uint16_t id,
+                uint16_t offset, ip_addr_t src, ip_addr_t dst, uint8_t *buf, size_t size)
+{
+	uint16_t hlen, total;
+	struct ip_hdr *hdr;
+
+	hlen = IP_HDR_SIZE_MIN;
+	total = hlen + len;
+	if (size < total) {
+		return -1;
+	}
+    /* 
+     * bufをip_hdrのポインタにキャストすることで、構造体として直感的に各値を入れられる。
+     * ip_hdrのメンバはコンパイラがパディングを勝手に入れないようにバイト数を調整されて
+     * いるので、キャストしてもぴったりbufに入るらしい。構造体をキャストするときはパディング
+     * に注意(もしくはコンパイラに指示してパディングを入れないように)して、メモリの状態を
+     * 完全に把握する必要がある。
+     */
+	hdr = (struct ip_hdr *)buf;
+    /* ビット操作して各値を取り出す */
+    /* hlenは4バイト単位なので4で割る(2ビット右シフト) */
+	hdr->vhl = (IP_VERSION_IPV4 << 4) | (hlen >> 2);
+	hdr->tos = 0;
+    /* ネットワークバイトオーダーに変換 */
+	hdr->total = hton16(total);
+	hdr->id = hton16(id);
+	hdr->offset = hton16(offset);
+	hdr->ttl = 0xff;
+	hdr->protocol = protocol;
+    /* ここでIPヘッダチェックサムに0に入れておかないとチェックサムの計算が変わるので注意 */
+	hdr->sum = 0;
+	hdr->src = src;
+	hdr->dst = dst;
+    /* IPヘッダのチェックサム計算 */
+	hdr->sum = cksum16((uint16_t *)hdr, hlen, 0); /* don't convert byteorder */
+    /* ペイロード部分からデータを書き込む */
+	memcpy(buf + hlen, data, len);
+	ip_print(buf, total);
+	return (ssize_t)total;
+}
+
+```
+
+- ネットワークデバイスからの送信 (p141)
+
+```c
+
+static int
+ip_output_device(struct ip_iface *iface, const uint8_t *data, size_t len, ip_addr_t target)
+{
+	char addr[IP_ADDR_STR_LEN];
+    /* ハードウェアアドレス */
+	uint8_t hwaddr[NET_DEVICE_ADDR_LEN] = {};
+
+    /* バイトオーダー変換 */
+	ip_addr_ntop(target, addr, sizeof(addr));
+	debugf("dev=%s, len=%zu, target=%s", NET_IFACE(iface)->dev->name, len, addr);
+    /* アドレス解決が必要かチェック */
+	if (NET_IFACE(iface)->dev->flags & NET_DEVICE_FLAG_NEED_ARP) {
+        /* ブロードキャストだった場合はブロードキャストアドレスをコピーしてくる */
+		if (target == iface->broadcast || target == IP_ADDR_BROADCAST) {
+			memcpy(hwaddr, NET_IFACE(iface)->dev->broadcast, NET_IFACE(iface)->dev->alen);
+		}
+        /* ユニキャストアドレスの解決(ARP)はまだ未実装なのでエラー */
+		else {
+			errorf("ARP does not implement");
+			return -1;
+		}
+	}
+    /* ネットワークデバイスからIPパケットを出力 */
+	return net_device_output(NET_IFACE(iface)->dev, NET_PROTOCOL_TYPE_IP, data, len, hwaddr);
+}
+
+```
+
+- テストプログラムの変更(p142)
+  - ネットワークデバイスの送信関数をIPモジュールの送信関数に変更(省略)
+
+- 実行結果
+
+```bash
+$ ./test/test.exe 2>&1 | tee -i step6_test.txt
+22:42:44.929 [I] setup: setup protocol stack... (test/test.c:35)
+22:42:44.930 [I] net_init: initialize... (net.c:195)
+22:42:44.930 [I] net_protocol_register: success, type=0x0800 (net.c:171)
+22:42:44.930 [I] net_init: success (net.c:204)
+22:42:44.930 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:49)
+22:42:44.930 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+22:42:44.930 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:99)
+22:42:44.930 [I] net_device_add_iface: success, dev=net0 (net.c:132)
+22:42:44.930 [I] net_run: startup... (net.c:213)
+22:42:44.930 [I] net_device_open: dev=net0 (net.c:56)
+22:42:44.930 [I] net_run: success (net.c:221)
+22:42:44.930 [D] app_main: press Ctrl+C to terminate (test/test.c:80)
+22:42:44.930 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=28 (ip.c:272)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 14790
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x8404
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+22:42:44.930 [D] ip_output_device: dev=net0, len=48, target=127.0.0.1 (ip.c:218)
+22:42:44.930 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
+22:42:44.930 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
+22:42:44.930 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:180)
+22:42:44.930 [D] ip_input: dev=net0, len=48 (ip.c:166)
+22:42:44.930 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:207)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 14790
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x8404
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+22:42:45.930 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=28 (ip.c:272)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 13448
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x8942
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+22:42:45.931 [D] ip_output_device: dev=net0, len=48, target=127.0.0.1 (ip.c:218)
+22:42:45.931 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:92)
+22:42:45.931 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
+22:42:45.931 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:180)
+22:42:45.931 [D] ip_input: dev=net0, len=48 (ip.c:166)
+22:42:45.931 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:207)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 13448
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x8942
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+22:42:46.838 [D] app_main: terminate (test/test.c:88)
+22:42:46.838 [I] cleanup: cleanup protocol stack... (test/test.c:64)
+22:42:46.838 [I] net_shutdown: shutting down... (net.c:230)
+22:42:46.838 [I] net_device_close: dev=net0 (net.c:74)
+22:42:46.838 [I] net_shutdown: success (net.c:237)
+
+```
+
+### 感想
+- 予め確保した配列をキャストして構造体とみなして扱う手法は面白かった。
+  これによるメリットは複数あるらしい。
+  - 可変長のデータ(ペイロード)を扱うときヘッダとペイロードを一つのbufに入れて、
+    隙間を詰めるようにデータを入れることができる(今回はmemcpyを使った)
+    - 隙間を詰めることでデータ送信時にそのまま送れば良くなるので無駄がない
+  - 同じbufを何度も使いまわすことができる
+
 ## step 5 2026-05-06
 ### 今回やったこと(概要)
 - step 5 (書籍 p113~)
