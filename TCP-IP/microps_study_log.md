@@ -14,6 +14,237 @@
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
 
+## step 7 2026-05-15
+### 今回やったこと(概要)
+- step 7 (書籍 p147)
+  - 上位プロトコルの管理
+
+### 学べたこと(具体的な内容)
+
+- プロトコルの登録 (p152)
+
+```c
+
+int
+ip_protocol_register(uint8_t protocol, ip_protocol_handler_t handler)
+{
+	struct ip_protocol *entry;
+    /* プロトコルのリストを先頭から走査して、登録するプロトコルがすでにあるならエラー */
+	for (entry = protocols; entry; entry = entry->next) {
+		if (entry->protocol == protocol) {
+			errorf("already exists, protocol=%u", protocol);
+			return -1;
+		}
+	}
+    /* メモリ確保 */
+	entry = memory_alloc(sizeof(*entry));
+	if (!entry) {
+		errorf("memory_alloc() failure");
+		return -1;
+	}
+    /* 各値を入れる */
+	entry->protocol = protocol;
+	entry->handler = handler;
+    /* 登録したプロトコルをリストの先頭に追加 */
+	entry->next = protocols;
+	protocols = entry;
+	infof("success, protocol=%u", protocol);
+	return 0;
+}
+
+```
+
+- パケットの振り分け (p153)
+  - プロトコル登録リストを走査して、IPヘッダのprotocolフィールドと一致するプロトコルを探す。
+  - プロトコルが見つかったらプロトコルの入力ハンドラを起動する。
+
+```c
+
+static void
+ip_input(const uint8_t *data, size_t len, struct net_device *dev)
+{
+	struct ip_hdr *hdr;
+	uint8_t v;
+	uint16_t hlen, total, offset;
+	struct ip_iface *iface;
+	char addr[IP_ADDR_STR_LEN];
+	struct ip_protocol *proto;
+
+	debugf("dev=%s, len=%zu", dev->name, len);
+    /* IPヘッダの長さをチェック */
+	if (len < IP_HDR_SIZE_MIN) {
+		errorf("too short");
+		return;
+	}
+	hdr = (struct ip_hdr *) data;
+    /* ビット操作してIPのバージョンを取り出す */
+	v = hdr->vhl >> 4;
+    /* IPv4でないならエラー */
+	if (v != IP_VERSION_IPV4) {
+		errorf("ip version error: v=%u", v);
+		return;
+	}
+    /* ヘッダ長を得るために、下位4ビットを取り出したあとに4倍(4バイト単位なので) */
+	hlen = (hdr->vhl & 0x0f) << 2;
+	if (len < hlen) {
+		errorf("header length error: len=%zu < hlen=%u", len, hlen);
+		return;
+	}
+    /* IPヘッダチェックサムの計算 */
+	if (cksum16((uint16_t *)hdr, hlen, 0) != 0) {
+		errorf("checksum error");
+		return;
+	}
+    /* バイトオーダー変換 */
+	total = ntoh16(hdr->total);
+	if (len < total) {
+		errorf("total length error: len=%zu < total=%u", len, total);
+		return;
+	}
+	offset = ntoh16(hdr->offset);
+    /* フラグメントに未対応なので、MFフラグが1かフラグメントオフセットが0でないときエラー */
+	if (offset & IP_HDR_FLAG_MF || offset & IP_HDR_OFFSET_MASK) {
+		errorf("fragments do not support");
+		return;
+	}
+    /* デバイスに紐づくインターフェースを探し、それをIPインターフェース構造体にダウンキャスト */
+	iface = (struct ip_iface *)net_device_get_iface(dev, NET_IFACE_FAMILY_IP);
+	if (!iface) {
+		/* ignore */
+		return;
+	}
+    /* 自分宛てのパケットでないなら無視 */
+	if (hdr->dst != iface->unicast) {
+		if (hdr->dst != iface->broadcast && hdr->dst != IP_ADDR_BROADCAST) {
+			/* ignore: for other host */
+			return;
+		}
+	}
+	debugf("permit, dev=%s, iface=%s", dev->name, ip_addr_ntop(iface->unicast, addr, sizeof(addr)));
+	ip_print(data, total);
+    /* プロトコルのリストを走査して、一致したらハンドラを起動 */
+	for (proto = protocols; proto; proto = proto->next) {
+		if (proto->protocol == hdr->protocol) {
+			proto->handler(hdr, data + hlen, total - hlen, iface);
+			return;
+		}
+	}
+	/* unsupported protocol */
+}
+
+```
+
+- ICMPモジュールの初期化関数(p154)
+  - ip_protocol_register()を呼ぶ(省略)
+
+- ICMPモジュールの入力ハンドラ(p155)
+
+```c 
+
+static void
+icmp_input(const struct ip_hdr *iphdr, const uint8_t *data, size_t len, struct ip_iface *iface)
+{
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[IP_ADDR_STR_LEN];
+	
+	debugf("%s => %s, len=%zu",
+        /* iphdrはICMPデータを持ってきたIPパケットのヘッダの先頭 */
+	    ip_addr_ntop(iphdr->src, addr1, sizeof(addr1)),
+	    ip_addr_ntop(iphdr->dst, addr2, sizeof(addr2)), len);
+	debugdump(data, len);
+}
+
+```
+
+- net_init()にicmp_initの呼び出しを追記(省略) (p156)
+
+- テストプログラムでのIPモジュールの送信関数の呼び出しで、ICMPのプロトコル番号を使うよう変更(省略)
+
+- 実行結果
+
+```bash
+$ ./test/test.exe 2>&1 | tee -i step_7.txt
+18:32:06.985 [I] setup: setup protocol stack... (test/test.c:35)
+18:32:06.985 [I] net_init: initialize... (net.c:196)
+18:32:06.985 [I] net_protocol_register: success, type=0x0800 (net.c:172)
+18:32:06.985 [I] ip_protocol_register: success, protocol=1 (ip.c:155)
+18:32:06.985 [I] net_init: success (net.c:209)
+18:32:06.985 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:50)
+18:32:06.985 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+18:32:06.985 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:106)
+18:32:06.985 [I] net_device_add_iface: success, dev=net0 (net.c:133)
+18:32:06.985 [I] net_run: startup... (net.c:218)
+18:32:06.985 [I] net_device_open: dev=net0 (net.c:57)
+18:32:06.985 [I] net_run: success (net.c:226)
+18:32:06.985 [D] app_main: press Ctrl+C to terminate (test/test.c:80)
+18:32:06.985 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=28 (ip.c:314)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 64564
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xc195
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+18:32:06.985 [D] ip_output_device: dev=net0, len=48, target=127.0.0.1 (ip.c:260)
+18:32:06.985 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:93)
+18:32:06.985 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
+18:32:06.985 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:181)
+18:32:06.985 [D] ip_input: dev=net0, len=48 (ip.c:201)
+18:32:06.985 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 64564
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xc195
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+18:32:06.985 [D] icmp_input: 127.0.0.1 => 127.0.0.1, len=28 (icmp.c:14)
+18:32:07.987 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=28 (ip.c:314)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 64672
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xc129
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+18:32:07.987 [D] ip_output_device: dev=net0, len=48, target=127.0.0.1 (ip.c:260)
+18:32:07.987 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:93)
+18:32:07.987 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
+18:32:07.987 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:181)
+18:32:07.987 [D] ip_input: dev=net0, len=48 (ip.c:201)
+18:32:07.987 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 64672
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xc129
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+18:32:07.987 [D] icmp_input: 127.0.0.1 => 127.0.0.1, len=28 (icmp.c:14)
+18:32:08.322 [D] app_main: terminate (test/test.c:88)
+18:32:08.322 [I] cleanup: cleanup protocol stack... (test/test.c:64)
+18:32:08.322 [I] net_shutdown: shutting down... (net.c:235)
+18:32:08.322 [I] net_device_close: dev=net0 (net.c:75)
+18:32:08.322 [I] net_shutdown: success (net.c:242)
+
+```
+### 感想
+- 特に難しいところはなかった。
+  - 次回からICMPモジュールの実装なので、「マスタリング TCP/IP」(p198~)を読んで予習しておこうと思う。
+
+#### メモ(本筋から外れた、あるいは重要度の低い内容)
 ## step 6 2026-05-13
 ### 今回やったこと(概要)
 - step 6 (書籍 p133~)
@@ -37,7 +268,7 @@ ip_output(uint8_t protocol, const uint8_t *data, size_t len, ip_addr_t src, ip_a
     /* ip_build_packet()で使う、IPパケットを入れる入れ物 */
 	uint8_t buf[IP_TOTAL_SIZE_MAX];
 	
-    /* バイトオーダー変換 */
+    /* バイナリから文字列へ変換 */
 	ip_addr_ntop(src, addr1, sizeof(addr1));
 	ip_addr_ntop(dst, addr2, sizeof(addr2));
 	debugf("%s => %s, protocol=%d, len=%zu", addr1, addr2, protocol, len);
@@ -146,7 +377,7 @@ ip_output_device(struct ip_iface *iface, const uint8_t *data, size_t len, ip_add
     /* ハードウェアアドレス */
 	uint8_t hwaddr[NET_DEVICE_ADDR_LEN] = {};
 
-    /* バイトオーダー変換 */
+    /* バイナリから文字列へ変換 */
 	ip_addr_ntop(target, addr, sizeof(addr));
 	debugf("dev=%s, len=%zu, target=%s", NET_IFACE(iface)->dev->name, len, addr);
     /* アドレス解決が必要かチェック */
