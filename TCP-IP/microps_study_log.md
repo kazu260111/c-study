@@ -3,16 +3,256 @@
 - ソースコードのライセンスはMITライセンスです。詳しくはLICENSEをご確認ください。
 
 ## 書籍情報
-**書籍名**: ゼロからのTCP/IPプロトコルスタック自作自作入門
+**書籍名**: ゼロからのTCP/IPプロトコルスタック自作入門
 **著者**: 山本雅也
 **出版社**: マイナビ出版
 
 # 学習メモ
-- 「ゼロからのTCP/IPプロトコルスタック自作自作入門」を読みながら学習したことをまとめる
-- 引用元リポジトリに自分のコメントをつけることで理解を深める
+- 「ゼロからのTCP/IPプロトコルスタック自作入門」を読みながら学習したことをまとめる
+- 引用したソースコードに自分のコメントをつけることで理解を深める
 - 書籍を読みながらTCP/IPプロトコルスタックを完成させる
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
+
+## step 8 2026-05-17
+### 今回やったこと(概要)
+- step 8 (書籍 p161~)
+ - ICMPメッセージの入力と検証
+   - ICMPメッセージの入力処理
+
+### 学べたこと(具体的な内容)
+- ICMPの基本
+  - ICMPメッセージはエラー通知のために使用される
+    - エラーを検出したルータまたは宛先からICMPメッセージが送られてくる
+  - ICMPメッセージ自体はIPパケットと同じように送信される
+    - IPヘッダのプロトコルフィールドにICMPのプロトコル番号が設定される
+    - ICMPメッセージ自体はIPパケットのペイロード部分に格納される
+  - ICMPメッセージの種類の区分には「エラー」と「照会」がある
+    - 「エラー」はIPパケットの送信過程で起きた問題を送信元に通知する
+      - 「Destination Unreachable」 は「3」
+    - 「照会」はネットワークやノードの状態を調べるために送信されたメッセージや、
+      それに対する応答
+      - 「Echo」は「8」、「Echo Reply」は「0」
+  - ICMPの基本仕様はRFC792で定められている
+  
+- ICMPメッセージの構造
+  - 種別(1byte)
+    - ICMPのメッセージ種別
+  - コード(1byte)
+    - メッセージをさらに細かく分類する値(メッセージごとに決まっているか、0が設定される)
+  - チェックサム(2byte)
+    - チェックサムの範囲はICMPメッセージ全体(可変長のデータも含む)であることに注意
+  - メッセージ固有フィールド(4byte)
+    - メッセージごとに違うものが書き込まれるフィールド
+  - データ(可変長)
+    - ICMPメッセージのデータ部分
+
+- Echo / Echo Replyメッセージ(種別:8/0)
+  - コード
+    - 未使用(常に0)
+  - メッセージ固有フィールド
+    識別子(2byte)とシーケンス番号(2byte)として扱われる
+    - 識別子
+      Echoメッセージを送信したプロセスのプロセスIDが設定される。
+      この値はEcho Replyが返されるときも変わらないので、Echo側はどのプロセスがEchoを
+      送信したか、Echo Replyの識別子を見て判断できる。
+    - シーケンス番号
+      同じプロセスが複数回Echoメッセージを送ったとき、何番目に送信されたメッセージか
+      判断するために使用する(初期値は0)。
+
+- Destination Unreachableメッセージ(種別:3)
+  - コード
+    - エラーの理由を示す番号が格納される(0:network unreachable など)
+  - メッセージ固有フィールド
+    - 未使用(常に0)
+  - データ:
+    - 原因となったIPパケットのIPヘッダとペイロードの先頭8バイトが格納される
+    
+- ICMPで使う構造体 (p167)
+
+```c
+
+/* ICMPヘッダの共通部分を扱う構造体 */
+struct icmp_common {
+   uint8_t type;  /* 種別 */
+    uint8_t code;  /* コード */
+    uint16_t sum;  /* チェックサム */
+};
+
+/* ICMPヘッダの構造体(メッセージ内容に依存しない) */
+struct icmp_hdr
+{
+    /* ICMPヘッダの共通部分の構造体 */
+    struct icmp_common com;
+    /* ICMPのメッセージ内容に依存するフィールド */
+    uint32_t dep;
+};
+
+/* Echoメッセージ用の構造体 */
+struct icmp_echo {
+    /* ICMPヘッダの共通部分の構造体 */
+    struct icmp_common com;
+    /* メッセージ固有フィールド */
+    uint16_t id;  /* 識別子 */ 
+    uint16_t seq;  /* シーケンス番号 */
+};
+
+/* Destination Unreachable用の構造体 */
+struct icmp_dest_unreach {
+    /* ICMPヘッダの共通部分の構造体 */
+    struct icmp_common com;
+    /* メッセージ固有フィールド */
+    uint32_t unused; /* このメッセージでは未使用の領域(常に0) */
+};
+
+```
+- IPパケットの詳細表示 (p170)
+
+```c
+
+static void
+icmp_print(const uint8_t *data, size_t len)
+{
+	struct icmp_hdr *hdr;
+	struct icmp_echo *echo;
+	struct icmp_dest_unreach *unreach;
+
+    /* エラー出力が他とかぶらないようにロック */
+	flockfile(stderr);
+    /* ICMPメッセージをメッセージ内容に依存しないICMPヘッダ構造体でキャスト */
+	hdr = (struct icmp_hdr *)data;
+    /* icmp_type_ntoaはメッセージを番号から文字列に変える */
+	fprintf(stderr, "	type: %u (%s)\n", hdr->icmp_type, icmp_type_ntoa(hdr->icmp_type));
+	fprintf(stderr, "	code: %u\n", hdr->icmp_code);
+	fprintf(stderr, "        sum: 0x%04x\n", ntoh16(hdr->icmp_sum));
+    /* メッセージの種類で分岐 */
+	switch (hdr->icmp_type) {
+		case ICMP_TYPE_ECHO_REPLY:
+		case ICMP_TYPE_ECHO:
+            /* Echo/Echo Reply用の構造体にキャスト */
+			echo = (struct icmp_echo *)hdr;
+			fprintf(stderr, "      	    id: %u\n", ntoh16(echo->id));
+			fprintf(stderr, "	   seq: %u\n", ntoh16(echo->seq));
+			break;
+		case ICMP_TYPE_DEST_UNREACH:
+            /* DestinationUnreachable用の構造体にキャスト */
+			unreach = (struct icmp_dest_unreach *)hdr;
+			fprintf(stderr, "	unused: %u\n", ntoh32(unreach->unused));
+			break;
+        /* その他のメッセージはこのプロジェクトでは対応しない */
+		default:
+			fprintf(stderr, "	   dep: 0x%08x\n", ntoh32(hdr->dep));
+			break;
+	}
+#ifdef HEXDUMP
+	hexdump(stderr, data, len);
+#endif
+    /* ロックの解除 */
+	funlockfile(stderr);
+}
+
+```
+
+- メッセージタイプを文字列に変換(p171)
+  - ICMPメッセージタイプの値を引数として、ICMPメッセージタイプの文字列を返す(コードは省略)
+
+- ICMPメッセージの検証 (p172)
+  - ICMPメッセージの長さ、チェックサムを検証する(コードは省略)
+
+- 実行結果
+```bash
+$ ./test/test.exe 2>&1 | tee -i step8.txt
+18:34:30.238 [I] setup: setup protocol stack... (test/test.c:35)
+18:34:30.238 [I] net_init: initialize... (net.c:196)
+18:34:30.238 [I] net_protocol_register: success, type=0x0800 (net.c:172)
+18:34:30.238 [I] ip_protocol_register: success, protocol=1 (ip.c:155)
+18:34:30.238 [I] net_init: success (net.c:209)
+18:34:30.238 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:50)
+18:34:30.238 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+18:34:30.238 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:106)
+18:34:30.238 [I] net_device_add_iface: success, dev=net0 (net.c:133)
+18:34:30.238 [I] net_run: startup... (net.c:218)
+18:34:30.238 [I] net_device_open: dev=net0 (net.c:57)
+18:34:30.238 [I] net_run: success (net.c:226)
+18:34:30.238 [D] app_main: press Ctrl+C to terminate (test/test.c:80)
+18:34:30.238 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=28 (ip.c:314)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 24383
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x5e8b
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+18:34:30.238 [D] ip_output_device: dev=net0, len=48, target=127.0.0.1 (ip.c:260)
+18:34:30.238 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:93)
+18:34:30.238 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
+18:34:30.238 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:181)
+18:34:30.238 [D] ip_input: dev=net0, len=48 (ip.c:201)
+18:34:30.238 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 24383
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x5e8b
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+18:34:30.238 [D] icmp_input: 127.0.0.1 => 127.0.0.1, len=28 (icmp.c:112)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x3564
+	id: 128
+	seq: 1
+18:34:31.240 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=28 (ip.c:314)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 14599
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x84c3
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+18:34:31.240 [D] ip_output_device: dev=net0, len=48, target=127.0.0.1 (ip.c:260)
+18:34:31.240 [D] net_device_output: dev=net0, type=0x0800, len=48 (net.c:93)
+18:34:31.241 [D] loopback_output: dev=net0, type=0x0800, len=48 (driver/loopback.c:13)
+18:34:31.241 [D] net_input: dev=net0, type=0x0800, len=48 (net.c:181)
+18:34:31.241 [D] ip_input: dev=net0, len=48 (ip.c:201)
+18:34:31.241 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 48 (payload: 28)
+	   id: 14599
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x84c3
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+18:34:31.241 [D] icmp_input: 127.0.0.1 => 127.0.0.1, len=28 (icmp.c:112)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x3564
+	id: 128
+	seq: 1
+18:34:31.649 [D] app_main: terminate (test/test.c:88)
+18:34:31.649 [I] cleanup: cleanup protocol stack... (test/test.c:64)
+18:34:31.649 [I] net_shutdown: shutting down... (net.c:235)
+18:34:31.649 [I] net_device_close: dev=net0 (net.c:75)
+18:34:31.649 [I] net_shutdown: success (net.c:242)
+```
+
+### 感想
+- 特に難しいところはなかった。
+  - 前回までから引き続き、必要なときにキャストで構造体の見方を変える手法が出てきた。
+    - この方法には大分慣れたので自作のプログラムでも応用してみたい。
+    - パディングのようなコンパイラの動作には注意するように気を付けたい。
 
 ## step 7 2026-05-15
 ### 今回やったこと
