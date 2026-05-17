@@ -14,6 +14,298 @@
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
 
+## step 9 2026-05-17
+### 今回やったこと(概要)
+- step 9 (書籍 p175~)
+  - ICMPメッセージの送信
+    - ICMPの照会メッセージ(Echoメッセージ)を受信したとき、Echo Replyを返せるようにする
+    - 受け取ったIPパケットに対応するプロトコルが登録されていないとき、IPパケットを破棄して
+      送信元にDestination Unreachableメッセージを送る(ICMPモジュールを経由する)
+
+- ICMPモジュール送信関数 (p178)
+
+```c
+
+int
+icmp_output(uint8_t type, uint8_t code, uint32_t val, const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst)
+{
+    /* ICMPメッセージを入れる箱(サイズはIPパケットのペイロードの最大サイズと同じ値 */
+	uint8_t buf[ICMP_BUFSIZ];
+	struct icmp_hdr *hdr;
+	size_t msg_len;
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[IP_ADDR_STR_LEN]; 
+
+    /* 受け取ったデータが長すぎたらエラー(オーバーフローしてしまう) */
+	if (sizeof(buf) < sizeof(*hdr) + len) {
+		errorf("too large");
+		return -1;
+	}
+    /* キャストしてicmp_hdr型のようにbufのメモリを扱えるようにする */
+	hdr = (struct icmp_hdr *)buf;
+    /* 各フィールドに値を入れる */
+	hdr->icmp_type = type;
+	hdr->icmp_code = code;
+	hdr->icmp_sum = 0;
+	hdr->dep = val;
+    /* データ部分はicmp_hdrではアクセスできないので、memcpyを使用して直接メモリを指定する */
+	memcpy(hdr + 1, data, len);
+    /* メッセージサイズを保存 */
+	msg_len = sizeof(*hdr) + len;
+    /* チェックサムの計算(ヘッダだけでなくメッセージ全体を計算することに注意) */
+	hdr->icmp_sum = cksum16((uint16_t *)hdr, msg_len, 0);
+	debugf("%s => %s, len=%zu",
+	    ip_addr_ntop(src, addr1, sizeof(addr1)),
+	    ip_addr_ntop(dst, addr2, sizeof(addr2)), msg_len);
+	icmp_print(buf, msg_len);
+    /* 構築したICMPメッセージをIPモジュール送信関数に渡す */
+	return ip_output(IP_PROTOCOL_ICMP, buf, msg_len, src, dst);
+}
+
+```
+
+- Echo Replyメッセージの送信 (p180)
+  - Echoメッセージを受信したらEcho Replyメッセージを送信するようにする
+
+```c
+
+static void
+icmp_input(const struct ip_hdr *iphdr, const uint8_t *data, size_t len, struct ip_iface *iface)
+{
+    /* 省略 */
+	hdr = (struct icmp_hdr *)data;
+    /* ICMP種別がEchoのときのみ応答する */
+	switch (hdr->icmp_type) {
+		case ICMP_TYPE_ECHO:
+			/*
+             * Echo Replyを送るので、受信したEchoメッセージの内容をそのまま送り返す。
+             * 送信元と宛先アドレスは入れ替えるが、送信元アドレスは
+             * 受信インターフェースのユニキャストアドレスにする。
+             * (元のEchoメッセージがブロードキャストアドレス宛の可能性があるため)
+             * 
+			 */
+			icmp_output(ICMP_TYPE_ECHO_REPLY, hdr->icmp_code, hdr->dep,
+			    (uint8_t *)(hdr + 1), len - sizeof(*hdr), iface->unicast, iphdr->src);
+			break;
+        /* 他の種別のメッセージは応答しない */
+		default:
+			/* ignore */
+			break;
+	}
+}
+
+```
+
+- Destination Unreachableメッセージの送信 (p181)
+  - 受け取ったIPパケットのプロトコル未登録だった場合、IPパケットは破棄される。
+    この場合にDestination Unreachableメッセージを送信する処理を追加する。
+
+```c
+
+static void
+ip_input(const uint8_t *data, size_t len, struct net_device *dev)
+{
+    
+    /* 省略 */
+    /*
+     * Destination UnreachableメッセージではIPヘッダとペイロードの先頭8バイト
+     * を送ることになっている。このプロジェクトではペイロードの長さが8バイト以上
+     * のときだけDestination Unreachableメッセージを送る。
+     */
+     /* IPパケットのペイロードが8バイト以上のとき(totalはIPパケット全体の長さ) */
+	if (hlen + 8 <= total) {
+        /* コードはprotocol unreachableとし、送るデータは受け取ったデータの先頭8バイトとする */
+		icmp_output(ICMP_TYPE_DEST_UNREACH, ICMP_CODE_PROTO_UNREACH, 0, data, hlen + 8, iface->unicast, hdr->src);
+	}
+}
+
+```
+
+- 実行結果
+
+```bash
+$ ./test/test.exe 2>&1 | tee -i step9.txt
+23:11:18.827 [I] setup: setup protocol stack... (test/test.c:36)
+23:11:18.827 [I] net_init: initialize... (net.c:196)
+23:11:18.827 [I] net_protocol_register: success, type=0x0800 (net.c:172)
+23:11:18.827 [I] ip_protocol_register: success, protocol=1 (ip.c:155)
+23:11:18.827 [I] net_init: success (net.c:209)
+23:11:18.827 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:50)
+23:11:18.827 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+23:11:18.827 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:106)
+23:11:18.827 [I] net_device_add_iface: success, dev=net0 (net.c:133)
+23:11:18.827 [I] net_run: startup... (net.c:218)
+23:11:18.827 [I] net_device_open: dev=net0 (net.c:57)
+23:11:18.827 [I] net_run: success (net.c:226)
+23:11:18.827 [D] app_main: press Ctrl+C to terminate (test/test.c:84)
+23:11:18.827 [D] icmp_output: 127.0.0.1 => 127.0.0.1, len=12 (icmp.c:155)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x39ed
+	id: 5752
+	seq: 1
+23:11:18.827 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=12 (ip.c:321)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 40343
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x2043
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+23:11:18.827 [D] ip_output_device: dev=net0, len=32, target=127.0.0.1 (ip.c:267)
+23:11:18.827 [D] net_device_output: dev=net0, type=0x0800, len=32 (net.c:93)
+23:11:18.827 [D] loopback_output: dev=net0, type=0x0800, len=32 (driver/loopback.c:13)
+23:11:18.827 [D] net_input: dev=net0, type=0x0800, len=32 (net.c:181)
+23:11:18.827 [D] ip_input: dev=net0, len=32 (ip.c:201)
+23:11:18.827 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 40343
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x2043
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+23:11:18.827 [D] icmp_input: 127.0.0.1 => 127.0.0.1, len=12 (icmp.c:115)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x39ed
+	id: 5752
+	seq: 1
+23:11:18.827 [D] icmp_output: 127.0.0.1 => 127.0.0.1, len=12 (icmp.c:155)
+	type: 0 (EchoReply)
+	code: 0
+	 sum: 0x41ed
+	id: 5752
+	seq: 1
+23:11:18.827 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=12 (ip.c:321)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 14851
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x83d7
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+23:11:18.827 [D] ip_output_device: dev=net0, len=32, target=127.0.0.1 (ip.c:267)
+23:11:18.827 [D] net_device_output: dev=net0, type=0x0800, len=32 (net.c:93)
+23:11:18.827 [D] loopback_output: dev=net0, type=0x0800, len=32 (driver/loopback.c:13)
+23:11:18.827 [D] net_input: dev=net0, type=0x0800, len=32 (net.c:181)
+23:11:18.827 [D] ip_input: dev=net0, len=32 (ip.c:201)
+23:11:18.827 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 14851
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x83d7
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+23:11:18.827 [D] icmp_input: 127.0.0.1 => 127.0.0.1, len=12 (icmp.c:115)
+	type: 0 (EchoReply)
+	code: 0
+	 sum: 0x41ed
+	id: 5752
+	seq: 1
+23:11:19.828 [D] icmp_output: 127.0.0.1 => 127.0.0.1, len=12 (icmp.c:155)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x39ec
+	id: 5752
+	seq: 2
+23:11:19.828 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=12 (ip.c:321)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 44766
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x0efc
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+23:11:19.828 [D] ip_output_device: dev=net0, len=32, target=127.0.0.1 (ip.c:267)
+23:11:19.828 [D] net_device_output: dev=net0, type=0x0800, len=32 (net.c:93)
+23:11:19.828 [D] loopback_output: dev=net0, type=0x0800, len=32 (driver/loopback.c:13)
+23:11:19.828 [D] net_input: dev=net0, type=0x0800, len=32 (net.c:181)
+23:11:19.828 [D] ip_input: dev=net0, len=32 (ip.c:201)
+23:11:19.828 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 44766
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x0efc
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+23:11:19.828 [D] icmp_input: 127.0.0.1 => 127.0.0.1, len=12 (icmp.c:115)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x39ec
+	id: 5752
+	seq: 2
+23:11:19.828 [D] icmp_output: 127.0.0.1 => 127.0.0.1, len=12 (icmp.c:155)
+	type: 0 (EchoReply)
+	code: 0
+	 sum: 0x41ec
+	id: 5752
+	seq: 2
+23:11:19.828 [D] ip_output: 127.0.0.1 => 127.0.0.1, protocol=1, len=12 (ip.c:321)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 6606
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xa40c
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+23:11:19.828 [D] ip_output_device: dev=net0, len=32, target=127.0.0.1 (ip.c:267)
+23:11:19.828 [D] net_device_output: dev=net0, type=0x0800, len=32 (net.c:93)
+23:11:19.828 [D] loopback_output: dev=net0, type=0x0800, len=32 (driver/loopback.c:13)
+23:11:19.828 [D] net_input: dev=net0, type=0x0800, len=32 (net.c:181)
+23:11:19.828 [D] ip_input: dev=net0, len=32 (ip.c:201)
+23:11:19.828 [D] ip_input: permit, dev=net0, iface=127.0.0.1 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 6606
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xa40c
+	  src: 127.0.0.1
+	  dst: 127.0.0.1
+23:11:19.828 [D] icmp_input: 127.0.0.1 => 127.0.0.1, len=12 (icmp.c:115)
+	type: 0 (EchoReply)
+	code: 0
+	 sum: 0x41ec
+	id: 5752
+	seq: 2
+23:11:20.534 [D] app_main: terminate (test/test.c:93)
+23:11:20.534 [I] cleanup: cleanup protocol stack... (test/test.c:65)
+23:11:20.534 [I] net_shutdown: shutting down... (net.c:235)
+23:11:20.534 [I] net_device_close: dev=net0 (net.c:75)
+23:11:20.534 [I] net_shutdown: success (net.c:242)
+
+```
+### 感想
+- 特に難しいところはなかった。
+  - 前回と今回でICMPの仕様を直接プログラムで学べたのが面白かった。
+    - テキストで読むだけよりも解像度が上がるので記憶に定着しやすいと思った。
+
 ## step 8 2026-05-17
 ### 今回やったこと(概要)
 - step 8 (書籍 p161~)
