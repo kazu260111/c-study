@@ -14,6 +14,168 @@
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
 
+## step 0 2026-05-19
+### 今回やったこと(概要)
+- step 10 (書籍 p187~)
+  - Ethernetフレーム入力の処理
+
+### 学べたこと(具体的な内容)
+- Ethernetの基本
+  - IEEE 802.3として標準化されている
+  - 様々なプロトコルのデータを運ぶことができる
+
+- Ethernetフレームの構造
+  - プリアンブル
+    Ethernetフレームの境界を識別する信号。
+    ハードウェアで処理されるのでこのプロジェクトでは気にしなくてよい。
+  - ヘッダ
+    - 宛先MACアドレス(6byte)
+      ブロードキャスト通信のときはFF:FF:FF:FF:FF:FFと設定。
+    - 送信元MACアドレス(6byte)
+    - 種別(2byte)
+      ペイロードに格納されているデータのプロトコルを示す。(EtherType)
+      IPの場合は0x0800。
+  - ペイロード(可変長)
+    MTUは一般的に1500なので、この場合Ethernetフレームの最大サイズは1518byteとなる。
+    フレームの最小サイズは64byteと定められているので、ペイロードは最低46byte必要。
+  - トレーラ(4byte)
+    FCS(Frame Check Sequence)が格納されている。
+    CRC(巡回冗長検査)でエラーを検出する。
+    FCSはハードウェアで処理されることが多いので、このプロジェクトでは気にしない。
+
+- Ethernetフレームの詳細を出力する (p195)
+
+```c
+/* Ehernetヘッダ構造体 */
+struct ether_hdr {
+    uint8_t dst[ETHER_ADDR_LEN];  /* 宛先MACアドレス(6byte) */
+    uint8_t src[ETHER_ADDR_LEN];  /* 送信元MACアドレス(6byte) */
+    uint16_t type;  /* 種別(2byte) */
+};
+
+void
+ether_print(const uint8_t *frame, size_t flen)
+{
+	struct ether_hdr *hdr;
+	char addr[ETHER_ADDR_STR_LEN];
+
+    /* エラー出力がかぶらないようにする */
+	flockfile(stderr);
+    /*
+     * EthernetフレームをEthernetヘッダの構造体でキャストして
+     * ヘッダの各フィールドににアクセスできるようにする 
+     */
+	hdr = (struct ether_hdr *)frame;
+    /* ether_addr_ntopはバイナリから文字列に変換する関数 */
+	fprintf(stderr, "	src: %s\n", ether_addr_ntop(hdr->src, addr, sizeof(addr)));
+	fprintf(stderr, "	dst: %s\n", ether_addr_ntop(hdr->dst, addr, sizeof(addr)));
+	fprintf(stderr, "	type: 0x%04x\n", ntoh16(hdr->type));
+#ifdef HEXDUMP
+	hexdump(stderr, frame, flen);
+#endif
+    /* ロック解除 */
+	funlockfile(stderr);
+}
+
+```
+    
+- MACアドレスのバイナリを文字列に変換する関数 (p196)
+
+```c
+
+char *
+ether_addr_ntop(const uint8_t *n, char *p, size_t size)
+{
+    /* nかpがNULLならエラー */
+    if (!n || !p) {
+        return NULL;
+    }
+    /* MACアドレスの形式で文字列をpに格納 */
+    snprintf(p, size, "%02x:%02x:%02x:%02x:%02x:%02x", n[0], n[1], n[2], n[3], n[4], n[5]);
+    return p;
+}
+
+```
+
+- MACアドレスを文字列からバイナリに変換する関数 (p197)
+
+```c
+
+int
+ether_addr_pton(const char *p, uint8_t *n)
+{
+    int index;
+    char *ep;
+    long val;
+    
+    /* 変換前の文字列か、バイナリの格納先がNULLならエラー */
+    if (!p || !n) {
+        return -1;
+    }
+    /* MACアドレスの長さ分(6回)ループする */
+    for (index = 0; index < ETHER_ADDR_LEN; index++) {
+        /* pを16進数の数字として読み取り、数字以外を読み取ったところで止まる(epに保存) */
+        val = strtol(p, &ep, 16);
+        /* 数字が読み取れないか、数字の値が異常か、最後の数字を読んだらループを抜ける */
+        if (ep == p || val < 0 || val > 0xff || (index < ETHER_ADDR_LEN - 1 && *ep != ':')) {
+            break;
+        }
+        /* バイナリに格納 */
+        n[index] = (uint8_t)val;
+        /* 次の読み取り開始位置を保存 */
+        p = ep + 1;
+    }
+    /* 読み取った数字の長さが異常か、最後に\0を読み取れなかったらエラー */
+    if (index != ETHER_ADDR_LEN || *ep != '\0') {
+        return -1;
+    }
+    return 0;
+}
+
+```
+
+- Ethernetフレームの送受信
+  このプロジェクトでは、EthernetフレームをOSの機能を使ってユーザ空間で直接送受信する。
+  以下でその方法についてまとめている。
+  - パケットソケット(socket())
+    よくパケットキャプチャで使われるシステムコール。
+    カーネル空間でOSのプロトコルスタックが受け取るフレームの複製を受け取ることができる。
+    (このプロジェクトでは使用しない)
+    - 使い方
+    ```c
+    /* 
+     * PF_PACKET: プロトコルファミリ(パケット)
+     * SOCK_RAW: ソケットタイプ(RAWデータ)
+     * ETH_P_ALL: 受信するプロトコルタイプ(すべて)
+     */
+    soc = socket(PF_PACKET, SOCK_RAW, ETH_P_ALL); 
+    ```
+  - TAPデバイス
+    - 仮想的なEthernetデバイス。アプリケーションから自由に読み書きできる。
+      OSからEthernetデバイスとして認識され、TAPデバイスへの入力はOSのプロトコルスタック
+      の入力として扱われる。また、OSのプロトコルスタックからTAPデバイスへの入力は
+      TAPデバイスを使用しているアプリケーション(自作プロトコルスタック)への入力となる。
+  
+  - TAPデバイスの作成
+    ```bash
+    $ sudo ip tuntap add mode tap user $USER name tap0
+    $ sudo ip addr add 192.0.2.1/24 dev tap0
+    $ sudo sysctl -q net.ipv6.conf.tap0.disable_ipv6=1
+    $ sudo ip link set tap0 up
+
+
+
+
+### 感想
+- Ethernetフレームの構造を学んだ。IPパケットでこういったデータの扱いに慣れていたので
+  特に苦戦しなかった。
+- socket()について調べるときにLinuxプログラムインターフェースを読んでみたが、
+  p1243~からTCP/IPについても説明されていた。
+  今やっている内容の理解の助けになりそうなので読んでおこうと思う。
+  - 分厚い書籍なので読むのが大変だが、定期的に読み進めてコードを書いていきたい。
+  - (メモ) p1262にリトル・ビックエンディアンについて
+  
+#### メモ(本筋から外れた、あるいは重要度の低い内容)
 ## step 9 2026-05-17
 ### 今回やったこと(概要)
 - step 9 (書籍 p175~)
