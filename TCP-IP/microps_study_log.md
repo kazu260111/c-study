@@ -156,13 +156,69 @@ ether_addr_pton(const char *p, uint8_t *n)
       の入力として扱われる。また、OSのプロトコルスタックからTAPデバイスへの入力は
       TAPデバイスを使用しているアプリケーション(自作プロトコルスタック)への入力となる。
   
-  - TAPデバイスの作成
+  - TAPデバイスの作成(再起動時にリセットされるので注意)
     ```bash
+    # tap0という名前でTAPデバイスを作成(userに権限を渡してsudoを使わなくていいようにしておく)
     $ sudo ip tuntap add mode tap user $USER name tap0
+    # TAPデバイスのアドレスを設定する
     $ sudo ip addr add 192.0.2.1/24 dev tap0
+    # IPv6機能を無効化しておく
     $ sudo sysctl -q net.ipv6.conf.tap0.disable_ipv6=1
+    # TAPデバイスの起動
     $ sudo ip link set tap0 up
+    ```
+  - TAPデバイスにIPアドレスが設定されたか確認
+    ```bash
+    $ ip addr show dev tap0
+    ```
+  - TAPデバイスが所属するサブネットワークの確認
+    ```bash
+    $ ip route show 192.0.2.0/24
+    ```
+  - 作成したTAPデバイスへのping
+    ```bash
+    # OSのプロトコルスタックが応答する
+    $ ping -c 3 192.0.2.1
+    ```
+  - 作成したTAPデバイスの所属するサブネットワークの他のIPアドレスへのping
+    ```bash
+    # tap0をオープンしているアプリケーションがまだないので、Destination Unreachableになる
+    $ ping -c 1 192.0.2.2
+    ```
+  - プログラムからTAPデバイスをオープンして制御する(概念的なコード) (p201)
+    ```c
+    int fd, err;
+    struct ifreq ifr;
+    ssize_t n;
+    uint8_t buf[2048];
+    /* デバイスファイルを読み書き可能で開く */
+    fd = open("/dev/net/tun", O_RDWR);
+    if (fd == -1) {
+        return -1;
+    }
+    /* ifr(インターフェースリクエスト構造体)を0で埋める */
+    memset(&ifr, 0, sizeof(ifr));
+    /* tap0の名前を登録 */
+    strcpy(ifr.ifr_name, "tap0");
+    /*
+     * flags: IFF_TUN    - TUN device (no Ethernet headers)
+     *        IFF_TAP    - TAP device
+     *        IFF_NO_PI  - Do not provide packet information
+     */
+    /* フラグの設定 */
+    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
+    /* ファイルディスクリプタ(open()で開けた場所)にTAPデバイスを接続 */
+    err = ioctl(fd, TUNSETIFF, &ifr);
+    if (err) {
+        return -1;
+    }
+    /* ファイルディスクリプタから実際に読み込む */
+    n = read(fd, buf, sizeof(buf);
 
+```
+
+- テストプログラムの作成(/test/tap.c) (p203)
+  - 省略(上述のTAPデバイスをオープンするコードを使用する)
 
 
 
