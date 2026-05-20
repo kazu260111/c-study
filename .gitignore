@@ -6,6 +6,7 @@
 *.o
 __pycache__/
 *.pyc
+*.vim
 member_management_system
 member.tsv
 
