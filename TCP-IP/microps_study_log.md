@@ -246,20 +246,8 @@ ether_addr_pton(const char *p, uint8_t *n)
 - テストプログラムの作成(/test/tap.c) (p203)
   - 省略(上述のTAPデバイスをオープンするコードを使用する)
 
-## つまづいたところ
-```c
-const uint8_t ETHER_ADDR_ANY[ETHER_ADDR_LEN] = {"\x00\x00\x00\x00\x00\x00"};
-const uint8_t ETHER_ADDR_BROADCAST[ETHER_ADDR_LEN] = {"\xff\xff\xff\xff\xff\xff"};
-```
-書籍のこのコード(p194)でETHER_ADDR_LEN = 6 なので文字列の終端の\0が入らないとコンパイラが警告を出した。
-コンパイラや環境よってはこのままでもエラーや警告にならず、\0は自動で切り捨てられるらしい。
-警告をなくすため以下のように修正することにした。
-```c
-const uint8_t ETHER_ADDR_ANY[ETHER_ADDR_LEN] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t ETHER_ADDR_BROADCAST[ETHER_ADDR_LEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-```
 
-- 実験結果
+### 実験結果
   - まず、makeコマンドでテストプログラムをビルドした。
     ```bash
     $ CFLAGS="-DHEXDUMP" make
@@ -330,6 +318,19 @@ const uint8_t ETHER_ADDR_BROADCAST[ETHER_ADDR_LEN] = {0xff, 0xff, 0xff, 0xff, 0x
     | 0020 | 00 00 00 00 00 00 c0 00 02 02                   | ..........       |
     +------+-------------------------------------------------+------------------+
     ```
+
+### つまづいたところ
+```c
+const uint8_t ETHER_ADDR_ANY[ETHER_ADDR_LEN] = {"\x00\x00\x00\x00\x00\x00"};
+const uint8_t ETHER_ADDR_BROADCAST[ETHER_ADDR_LEN] = {"\xff\xff\xff\xff\xff\xff"};
+```
+書籍のこのコード(p194)でETHER_ADDR_LEN = 6 なので文字列の終端の\0が入らないとコンパイラが警告を出した。
+コンパイラや環境よってはこのままでもエラーや警告にならず、\0は自動で切り捨てられるらしい。
+警告をなくすため以下のように修正することにした。
+```c
+const uint8_t ETHER_ADDR_ANY[ETHER_ADDR_LEN] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t ETHER_ADDR_BROADCAST[ETHER_ADDR_LEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+```
 
 ### 感想
 - Ethernetフレームの構造を学んだ。IPパケットでこういったデータの扱いに慣れていたので
