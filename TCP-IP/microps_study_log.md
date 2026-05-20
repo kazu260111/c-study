@@ -14,7 +14,7 @@
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
 
-## step 0 2026-05-19
+## step 10 2026-05-19
 ### 今回やったこと(概要)
 - step 10 (書籍 p187~)
   - Ethernetフレーム入力の処理
