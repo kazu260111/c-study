@@ -241,7 +241,7 @@ ether_addr_pton(const char *p, uint8_t *n)
     /* ファイルディスクリプタから実際に読み込む */
     n = read(fd, buf, sizeof(buf);
 
-```
+    ```
 
 - テストプログラムの作成(/test/tap.c) (p203)
   - 省略(上述のTAPデバイスをオープンするコードを使用する)
