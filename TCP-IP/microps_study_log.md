@@ -7,6 +7,13 @@
 **著者**: 山本雅也
 **出版社**: マイナビ出版
 
+### その他の参考書
+**書籍名**: Linuxプログラミングインターフェース
+**著者**: Michael Kerrisk
+**訳者**: 千住　治郎
+**出版社**: オライリー・ジャパン
+- 引用時はTLPIと表記する
+
 # 学習メモ
 - 「ゼロからのTCP/IPプロトコルスタック自作入門」を読みながら学習したことをまとめる
 - 引用したソースコードに自分のコメントをつけることで理解を深める
@@ -15,9 +22,8 @@
 
 ## step 11 2026-05-20 
 ### 今回やったこと(概要)
-- step11 (p207)
-  - Ethernet デバイスドライバの実装
-    - TAPデバイスをプロトコルスタックから利用できるようにする
+- Ethernet デバイスドライバの実装
+  - TAPデバイスをプロトコルスタックから利用できるようにする
   - 割り込みによりパケットに対応できるようにする
 
 ### 学べたこと(具体的な内容)
@@ -28,9 +34,375 @@
     - パケットを受信してハードウェア割り込みがあったら割り込み処理機構がデバイスハンドラの
       割り込みハンドラ(ISR)を実行する
     - このプロジェクトではシグナルを利用して割り込みをユーザ空間で再現している
-      - 詳しくはこの学習メモの最初の方に書いてある
+      - 詳しくはこの学習メモの最初の方でやっている
 
+- デバイスドライバの初期化関数  (p21)
+
+```c
+struct ether_tap {
+    char name[IFNAMSIZ];
+    int fd;  /* ファイルディスクリプタ */
+    unsigned int irq;  /* IRQ番号 */
+};
+
+/* 構造体の初期化(open,close,outputで簡単にether_tap用の関数を呼べるようにする) */
+static struct net_device_ops ether_tap_ops = {
+    .open = ether_tap_open,
+    .close = ether_tap_close,
+    .output = ether_tap_output,
+};
+
+struct net_device *
+ether_tap_init(const char *name, const char *addr)
+{
+	struct net_device *dev;
+	struct ether_tap *tap;
+
+	infof("name=%s, addr=%s", name, addr ? addr : "(none)");
+    /* メモリ確保 */
+	dev = net_device_alloc();
+	if (!dev) {
+		errorf("net_device_alloc() failure");
+		return NULL;
+	}
+    /* ether_tap用の関数を入れておく */
+	dev->ops = &ether_tap_ops;
+    /* メモリ確保 */
+	tap = memory_alloc(sizeof(*tap));
+	if (!tap) {
+		errorf("memory_alloc() failure");
+		return NULL;
+	}
+    /* \0の場所を確実に確保するために、コピーする最大のバイト数を1バイト少なくする */
+	strncpy(tap->name, name, sizeof(tap->name) - 1);
+    /* ファイルディスクリプタを-1に(無効) */
+	tap->fd = -1;
+    /* IRQ番号(割り込みの番号) */
+	tap->irq = ETHER_TAP_IRQ;
+    /* TAPデバイスの制御ルーチンが使うデータをprivに入れておく */
+	dev->priv = tap;
+    /* デバイス登録 */
+	if (net_device_register(dev) == -1) {
+		errorf("net_device_register() failure");
+        /* 登録が失敗したら必ずメモリを解放するのを忘れない */
+		memory_free(tap);
+		return NULL;
+	}
+    
+    /*
+     * 割り込みの登録
+     * INTR_IRQ_SHAREDは同じ割り込み番号の登録を許容するフラグ
+     */
+	if (intr_register(tap->irq, ether_tap_isr, INTR_IRQ_SHARED, dev) == -1) {
+		errorf("intr_register() failure");
+		return NULL;
+	}
+	infof("success, dev=%s, irq=%d", dev->name, tap->irq);
+	return dev;
+}
+
+```
+
+- 起動ルーチン (p213)
+
+```c
+/* privに格納されたether_tap固有のデータを取り出すときに使う */
+#define PRIV(x) ((struct ether_tap *)x->priv)
+
+static int
+ether_tap_open(struct net_device *dev)
+{
+	struct ether_tap *tap;
+    /* ioctl()で使うifreqを初期化
+	struct ifreq ifr = {0};
+	int val;
+	char addr[ETHER_ADDR_STR_LEN];
+
+    /* privに格納されたtap固有のデータを取り出す */
+	tap = PRIV(dev);
+    /* ファイルディスクリプタを設定 */
+	tap->fd = open(CLONE_DEVICE, O_RDWR);
+	if (tap->fd == -1) {
+		errorf("open: %s, dev=%s", strerror(errno), dev->name);
+		return -1;
+	}
+    /* 名前を入れる(コピーするバイト数を-1するのを忘れない) */
+	strncpy(ifr.ifr_name, tap->name, sizeof(ifr.ifr_name) - 1);
+        /* IFF_NO_PI: パケット情報を付与しない */
+        ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
+        /* インターフェースのセットアップ */
+	if (ioctl(tap->fd, TUNSETIFF, &ifr) == -1) {
+		errorf("ioctl(TUNSETIFF): %s, dev=%s", strerror(errno), dev->name);
+        /* エラーのときは閉じるのを忘れない */
+		close(tap->fd);
+		return -1;
+	}
+    /* tap->fdでイベントが発生したら、getpid()にシグナルを送る */
+	if (fcntl(tap->fd, F_SETOWN, getpid()) == -1) {
+		errorf("fcntl(F_SETOWN): %s, dev=%s", strerror(errno), dev->name);
+		close(tap->fd);
+		return -1;
+	}
+    /* 現在の設定をvalに格納 */
+	val = fcntl(tap->fd, F_GETFL, 0);
+	if (val == -1) {
+		errorf("fcntl(F_GETFL):%s, dev=%s", strerror(errno), dev->name);
+		close(tap->fd);
+		return -1;
+	}
+    /*
+     * 現在の設定(val)にO_ASYNCとO_NONBLOCKを追加
+     * O_ASYNC: 読み込み可能になったらシグナル発生 (TLPI p79)
+     * O_NONBLOCK: ノンブロッキング (TLPI p110)
+     *             ファイルがすぐにオープンできない場合エラーを返す
+     */
+	if (fcntl(tap->fd, F_SETFL, val | O_ASYNC | O_NONBLOCK) == -1) {
+		errorf("fcntl(F_SETFL):%s, dev=%s", strerror(errno), dev->name);
+		close(tap->fd);
+		return -1;
+	}
+    /* シグナルを設定 */
+	if (fcntl(tap->fd, F_SETSIG, tap->irq) == -1) {
+		errorf("fcntl(F_SETSIG):%s, dev=%s", strerror(errno), dev->name);
+		close(tap->fd);
+		return -1;
+	}
+    /* MACアドレスがdev->addrに設定されていなかったら(すべて0なら) */
+	if (memcmp(dev->addr, ETHER_ADDR_ANY, ETHER_ADDR_LEN) == 0) {
+        /* Linuxから見たTAPデバイスのMACアドレスを取得して使用する */
+		if (ether_tap_set_default_addr(dev) == -1) {
+			errorf("ether_tap_set_default_addr() failure, dev=%s", dev->name);
+			close(tap->fd);
+			return -1;
+		}
+	}
+	infof("dev=%s, addr=%s", dev->name, ether_addr_ntop(dev->addr, addr, sizeof(addr)));
+	return 0;
+}
+```
+
+- MACアドレスの取得 (p215)
+
+```c
+static int
+ether_tap_set_default_addr(struct net_device *dev)
+{
+	int soc;
+	struct ifreq ifr = {};
+    /* socket()でソケットディスクリプタを取得(ioctl()の呼び出しのみで使用するダミー)*/
+	soc = socket(AF_INET, SOCK_DGRAM, 0);
+	if (soc == -1) {
+		errorf("socket: %s, dev=%s", strerror(errno), dev->name);
+		return -1;
+	}
+    /* 対象の名前をifreqに入れる */
+	strncpy(ifr.ifr_name, PRIV(dev)->name, sizeof(ifr.ifr_name) - 1);
+    /* ダミーソケットを使ってifrのMACアドレスを得る */
+	if (ioctl(soc, SIOCGIFHWADDR, &ifr) == -1) {
+	       errorf("ioctl(SIOCGIFHWADDR): %s, dev=%s", strerror(errno), dev->name);
+           /* ダミーのソケットディスクリプタを閉じる */
+	       close(soc);
+	       return -1;
+	}
+    /* MACアドレスを直接書き込む */
+	memcpy(dev->addr, ifr.ifr_hwaddr.sa_data, ETHER_ADDR_LEN);
+    /* ダミーのソケットディスクリプタを閉じる */
+	close(soc);
+	return 0;
+}
+
+```
+
+- 停止ルーチン (p216)
+  - close(PRIV(dev)->fd)で閉じる
+
+- 出力ルーチン (p216)
+```c
+int
+ether_tap_output(struct net_device *dev, uint16_t type, const uint8_t *buf, size_t len, const void *dst)
+{
+    /* Ethernetフレームを構築するバッファ(ここで0埋めされている) */
+	uint8_t frame[ETHER_FRAME_SIZE_MAX] = {};
+	struct ether_hdr *hdr;
+    /* padはパディング(0で埋める) */
+	size_t flen, pad = 0;
+
+    /* キャストしてEthernetヘッダ部分を構造体として扱う */
+	hdr = (struct ether_hdr *)frame;
+    /* memcpyで直接データを取り出す */
+	memcpy(hdr->dst, dst, ETHER_ADDR_LEN);
+	memcpy(hdr->src, dev->addr, ETHER_ADDR_LEN);
+    /* バイトオーダー変換 */
+	hdr->type = hton16(type);
+    /* hdr + 1 でhdrの位置(frameの最初)からhdrの構造体の分(ペイロード部分の入り口まで)アドレスが進む */
+	memcpy(hdr + 1, buf, len);
+    /* 
+     * ペイロードが短すぎると、Ethernetの規格に違反するので
+     * パディングをする必要がある(最初からframeは0x00で埋まっている
+     * ので、padの長さでflenを調整)
+     */
+	if (len < ETHER_PAYLOAD_SIZE_MIN) {
+		pad = ETHER_PAYLOAD_SIZE_MIN - len;
+	}
+    /* フレームの長さを計算(パディングの分を足してフレームの最小サイズ以上にする) */
+	flen = sizeof(*hdr) + len + pad;
+	debugf("dev=%s, type=0x%04x, len=%zu", dev->name, type, flen);
+	ether_print(frame, flen);
+    /* 構築したEthernetフレームを書き込む */
+	if (write(PRIV(dev)->fd, frame, flen) == -1) {
+		errorf("write: %s", strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+```
+
+- 割り込みハンドラ  (p218)
+
+```c
+static void
+ether_tap_isr(unsigned int irq, void *arg)
+{
+	struct net_device *dev;
+	uint8_t buf[ETHER_FRAME_SIZE_MAX];
+	ssize_t n;
+    /* 使わない引数を書いておく */
+	(void)irq;
+    /* 引数を実際の型に変換 */
+	dev = (struct net_device *)arg;
+    /* 届いたパケットをループして取り出していく */
+	while (1) {
+        /* パケットをデバイスから読み出す */
+		n = read(PRIV(dev)->fd, buf, sizeof(buf));
+        /* ノンブロッキングモードに設定してあるので読めなければ即座にエラーを返す */
+		if (n == -1) {
+            /* 別のシグナルで中断された場合やり直す */
+			if (errno == EINTR) {
+				continue;
+			}
+            /* 読めるパケットがないときループを抜ける */
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				break;
+			}
+			errorf("read : %s, dev=%s", strerror(errno), dev->name);
+			return;
+		}
+        /* 入力ルーチンを呼ぶ */
+		ether_tap_input(dev, buf, n);
+	}
+	return;
+}
+
+```
+
+- 入力ルーチン (p219)
+
+```c
+static int
+ether_tap_input(struct net_device *dev, uint8_t *frame, size_t flen)
+{
+	struct ether_hdr *hdr;
+	uint16_t type;
+    
+    /* 
+     * flenが符号ありの数値でマイナスの数だとバグの原因になるため
+     * (符号ありが符号なしに変換されて比較されてしまう)
+     * 条件式の右辺(確実に正の数)を符号ありの型にキャストしている？
+     * 実際はflenはsize_tなのでキャストしなくてもいいはず
+     */
+    /* サイズが小さすぎるときはエラーを返す */
+	if (flen < (ssize_t)sizeof(*hdr)){
+		errorf("too short");
+		return -1;
+	}
+    /* フレームをEthernetヘッダにキャストして構造体として扱う */
+	hdr = (struct ether_hdr *)frame;
+    /* メモリを直接比較して、一致しているか調べる(0だと一致) */
+	if (memcmp(dev->addr, hdr->dst, ETHER_ADDR_LEN) != 0) {
+        /* ブロードキャストアドレスと比較 */
+		if (memcmp(ETHER_ADDR_BROADCAST, hdr->dst, ETHER_ADDR_LEN) != 0) {
+			/* for other host */
+			return -1;
+		}
+	}
+    /* バイトオーダー変換 */
+	type = ntoh16(hdr->type);
+	debugf("dev=%s, type=0x%04x, len=%zd", dev->name, type, flen);
+	ether_print(frame, flen);
+    /* データをプロトコルスタックへ渡す */
+	return net_input(type, (uint8_t *)(hdr + 1), flen - sizeof(*hdr), dev);
+}
+
+```
+
+- 割り込み機構の組み込み(p220)
+  - プラットフォーム固有の処理に割り込み機構の関数を追加(省略)
+
+- setup関数の拡張 (p221)
+  - Ethertapデバイスの処理を追加(省略)
+
+- app_main関数でICMPの処理を消してsleepするだけの処理に変更(省略)
+ 
 ### 実行結果
+- 先にmake tapでTAPデバイスを起動(前回の起動時のコマンドをまとめたコマンド)
+- 途中で前回と同様に別タブからpingを送った。
+```bash
+$ ./test/test.exe 2>&1 | tee -i step11.txt 
+19:09:55.588 [I] setup: setup protocol stack... (test/test.c:36)
+19:09:55.588 [I] net_init: initialize... (net.c:196)
+19:09:55.588 [I] net_protocol_register: success, type=0x0800 (net.c:172)
+19:09:55.588 [I] ip_protocol_register: success, protocol=1 (ip.c:155)
+19:09:55.588 [I] net_init: success (net.c:209)
+19:09:55.588 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:50)
+19:09:55.588 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+19:09:55.588 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:106)
+19:09:55.588 [I] net_device_add_iface: success, dev=net0 (net.c:133)
+19:09:55.588 [I] ether_tap_init: name=tap0, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:206)
+19:09:55.588 [I] net_device_register: success, dev=net1, type=0x0000 (net.c:50)
+19:09:55.588 [I] intr_register: success, irq=35 (platform/linux/intr.c:53)
+19:09:55.588 [I] ether_tap_init: success, dev=net1, irq=35 (platform/linux/driver/ether_tap.c:231)
+19:09:55.588 [I] ip_iface_register: dev=net1, 192.0.2.2, 255.255.255.0, 192.0.2.255 (ip.c:106)
+19:09:55.588 [I] net_device_add_iface: success, dev=net1 (net.c:133)
+19:09:55.588 [I] net_run: startup... (net.c:218)
+19:09:55.588 [I] intr_main: start... (platform/linux/intr.c:69)
+19:09:55.589 [I] net_device_open: dev=net1 (net.c:57)
+19:09:55.591 [I] ether_tap_open: dev=net1, addr=76:a7:3d:a5:47:aa (platform/linux/driver/ether_tap.c:109)
+19:09:55.591 [I] net_device_open: dev=net0 (net.c:57)
+19:09:55.591 [I] net_run: success (net.c:226)
+19:09:55.591 [D] app_main: press Ctrl+C to terminate (test/test.c:90)
+19:09:55.592 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+19:09:55.853 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+19:09:56.421 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+19:10:04.416 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+19:10:09.954 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+19:10:09.954 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+19:10:09.954 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:181)
+19:10:10.986 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+19:10:10.986 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+19:10:10.986 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:181)
+19:10:12.027 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+19:10:12.027 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+19:10:12.027 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:181)
+19:10:20.427 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+19:10:39.759 [D] app_main: terminate (test/test.c:94)
+19:10:39.759 [I] cleanup: cleanup protocol stack... (test/test.c:79)
+19:10:39.759 [I] net_shutdown: shutting down... (net.c:235)
+19:10:39.759 [I] intr_main: terminated (platform/linux/intr.c:96)
+19:10:39.759 [I] net_device_close: dev=net1 (net.c:75)
+19:10:39.760 [I] ether_tap_close: dev=net1 (platform/linux/driver/ether_tap.c:116)
+19:10:39.760 [I] net_device_close: dev=net0 (net.c:75)
+19:10:39.760 [I] net_shutdown: success (net.c:242)
+```
 
 ### 感想
 - fcntl()でF_SETSIGを使おうとしたら、vim内のclangdで未定義だと出てしまった。
@@ -39,11 +411,15 @@
   - compile_flags.txtに-D\_GNU\_SOURCEを追記することでvim内でエラーが出なくなった。
     - と思ったらether_tap.cではすでに#define \_GNU\_SOURCEとされていて、今度は二重に定義されているという
       警告が出てきた。とりあえず実際のコンパイルではcompile_flags.txtは関係ないのでこのままにする。
+  - 実際のコンパイル時にF_SETSIGが未定義扱いされてしまった。
+    - ether_tap.cで#define \_GNU\_SOURCEを一番上の行に移動することで解決した。
+      - TLPI(p64)に機能検査マクロはすべてのヘッダファイルより先に定義する必要があると書いてあった。
+- MACアドレスを取得するときにsocket()を使う手法はよく使いそうなので覚えておきたい。
+- システムコールが今回多く出てきたので、曖昧な理解のところはTLPIで体系的に学ぶようにしておきたい。
 
 ## step 10 2026-05-19
 ### 今回やったこと(概要)
-- step 10 (書籍 p187~)
-  - Ethernetフレーム入力の処理
+- Ethernetフレーム入力の処理
 
 ### 学べたこと(具体的な内容)
 - Ethernetの基本
@@ -347,11 +723,10 @@ const uint8_t ETHER_ADDR_BROADCAST[ETHER_ADDR_LEN] = {0xff, 0xff, 0xff, 0xff, 0x
 
 ## step 9 2026-05-17
 ### 今回やったこと(概要)
-- step 9 (書籍 p175~)
-  - ICMPメッセージの送信
-    - ICMPの照会メッセージ(Echoメッセージ)を受信したとき、Echo Replyを返せるようにする
-    - 受け取ったIPパケットに対応するプロトコルが登録されていないとき、IPパケットを破棄して
-      送信元にDestination Unreachableメッセージを送る(ICMPモジュールを経由する)
+- ICMPメッセージの送信
+  - ICMPの照会メッセージ(Echoメッセージ)を受信したとき、Echo Replyを返せるようにする
+  - 受け取ったIPパケットに対応するプロトコルが登録されていないとき、IPパケットを破棄して
+    送信元にDestination Unreachableメッセージを送る(ICMPモジュールを経由する)
 
 - ICMPモジュール送信関数 (p178)
 
@@ -639,9 +1014,8 @@ $ ./test/test.exe 2>&1 | tee -i step9.txt
 
 ## step 8 2026-05-17
 ### 今回やったこと(概要)
-- step 8 (書籍 p161~)
- - ICMPメッセージの入力と検証
-   - ICMPメッセージの入力処理
+- ICMPメッセージの入力と検証
+  - ICMPメッセージの入力処理
 
 ### 学べたこと(具体的な内容)
 - ICMPの基本
@@ -879,8 +1253,7 @@ $ ./test/test.exe 2>&1 | tee -i step8.txt
 
 ## step 7 2026-05-15
 ### 今回やったこと
-- step 7 (書籍 p147)
-  - 上位プロトコルの管理
+- 上位プロトコルの管理
 
 ### 学べたこと(具体的な内容)
 
@@ -1110,9 +1483,8 @@ $ ./test/test.exe 2>&1 | tee -i step_7.txt
 #### メモ(本筋から外れた、あるいは重要度の低い内容)
 ## step 6 2026-05-13
 ### 今回やったこと(概要)
-- step 6 (書籍 p133~)
-  - IPパケットの送信
-    - ルーティングやアドレス解決はまだ実装しない
+- IPパケットの送信
+  - ルーティングやアドレス解決はまだ実装しない
 
 ### 学べたこと(具体的な内容)
 - IPモジュールの送信 (p136)
@@ -1353,8 +1725,7 @@ $ ./test/test.exe 2>&1 | tee -i step6_test.txt
 
 ## step 5 2026-05-06
 ### 今回やったこと(概要)
-- step 5 (書籍 p113~)
-  - 論理インターフェース
+- 論理インターフェース
 
 ### 学べたこと(具体的な内容)
 - 論理インターフェース
@@ -1630,8 +2001,7 @@ $ ./test/test.exe 2>&1 | tee -i step5_test.txt
 
 ## step 4 2026-05-05
 ### 今回やったこと(概要)
-- step 4 (書籍 p91~)
-  - IPパケットの入力と検証
+- IPパケットの入力と検証
 
 ### 学べたこと(具体的な内容)
 #### IPパケット
@@ -1936,8 +2306,7 @@ $ ./test/test.exe 2>&1 | tee -i step4_test.txt
 
 ## step 3 2026-05-01
 ### 今回やったこと(概要)
-- step 3 (書籍 p79~)
-  - プロトコルの管理
+- プロトコルの管理
 
 ### 学べたこと(具体的な内容)
 - プロトコル種別
@@ -2148,10 +2517,9 @@ $ ./test/test.exe 2>&1 | tee -i step3_test.txt
 
 ## step 2 2026-04-30
 ### 今回やったこと(概要)
-- step 2 (書籍 p63~)
-  - デバイスドライバ
-    - ネットワークデバイスのドライバ
-    - ループバックデバイスのドライバ
+- デバイスドライバ
+  - ネットワークデバイスのドライバ
+  - ループバックデバイスのドライバ
 
 ### 学べたこと(具体的な内容)
 - デバイスドライバ
@@ -2362,7 +2730,7 @@ $ ./test/test.exe
 
 ## step 1 2026-04-29
 ### 今回やったこと(概要)
-- step 1 (書籍 p45~)
+- ネットワークデバイスの処理
 
 ### 学べたこと(具体的な内容)
 - ネットワークデバイス構造体(p50) (net.c)
@@ -2642,8 +3010,7 @@ $ ./test.exe
 
 ## Appendix 3 2026-04-28
 ### 今回やったこと(概要)
-- Appendix 3 (書籍 p595~)
-  - タスク管理
+- タスク管理
 
 ### 学べたこと(具体的な内容)
 - タスク構造体 (p595) 
@@ -2895,8 +3262,7 @@ sched_shutdown(void)
 
 ## Appendix 2  2026-04-27
 ### 今回やったこと(概要)
-- Appendix 2 (書籍 p587~)
-  - タイマー処理
+- タイマー処理
 
 ### 学べたこと(具体的な内容)
 - 以下は platform/linux/timer.c の一部
@@ -3049,7 +3415,7 @@ timer_shutdown(void)
 
 ## Appendix 1  2026-04-25,26
 ### 今回やったこと(概要)
-- Appendix 1  A1.4 ~ A1.6  (書籍 p578 ~ p585)
+- 割り込み
 
 ### 学べたこと(具体的な内容)
 - 以下は学習のためにplatform/linux/intr.cの一部にコメントをつけたもの(p577~)
