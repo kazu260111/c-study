@@ -72,7 +72,7 @@ Missing rpms, try: dnf --enablerepo='*debug*' install glibc-debuginfo-2.43-5.fc4
 #1  0x0000000000400496 in main () at null_pointer.c:11
 (gdb) 
 ```
-- null_pointer()でセグメンテーションフォルトが起きているので、さらに調べる
+- null_pointer_func()でセグメンテーションフォルトが起きているので、さらに調べる
 ```text
 (gdb) p p  # pに何が入っているか調べる
 $1 = (int *) 0x0  # NULLポインタを操作しようとしていた
@@ -123,7 +123,7 @@ End of assembler dump.
 - このまま進めてもいいが、TUIモードを有効にするとレジスタの値などが見やすくなる。
   - set logging enabled on で記録モードにしていた場合、TUIモードだとうまく記録されないようなので注意
 ```text
-$ layout regs  # 3つのウィンドウになる
+(gdb) layout regs  # 3つのウィンドウになる
 # Ctrl + x を押したあとにoを押すとアクティブウィンドウを切り替えられる
 # layout asm や layout src、layout splitなどで必要なウィンドウだけ出せる
 ```
@@ -218,7 +218,7 @@ $ ./use_memory_after_free
    0x00000000004004e3 <+77>:    mov    $0x4,%esi
    0x00000000004004e8 <+82>:    mov    $0x1,%edi
    0x00000000004004ed <+87>:    call   0x400390 <calloc@plt>  # callocでメモリを確保して、0で埋める
-   0x00000000004004f2 <+92>:    mov    %rax,-0x10(%rbp)  # ここでおそらく最初に確保したのと同じアドレスを渡している
+   0x00000000004004f2 <+92>:    mov    %rax,-0x10(%rbp)  # ここでおそらく最初にmallocで確保したのと同じアドレスを渡している
    0x00000000004004f6 <+96>:    mov    -0x8(%rbp),%rax
    0x00000000004004fa <+100>:   mov    (%rax),%eax
    0x00000000004004fc <+102>:   mov    %eax,%esi
@@ -255,3 +255,182 @@ $ ./use_memory_after_free
 0x404010:       0x00000000  # 最初のmallocと同じアドレスをcallocは確保している
 ```
 - mallocとcallocが同じアドレスを確保しているため、callocがポインタが指していた2を0で埋めてしまったことがわかる。
+
+## スタック内の破棄されたローカル変数にアクセスする
+- 関数内で定義されたローカル変数はメモリ上のスタックに配置されるが、関数が終わると破棄される。
+  破棄されたローカル変数にわざとアクセスして、その危険性を確認する。
+
+```c
+/* 注意：このプログラムは実験用です。意図的なバグが含まれています。 */
+#include <stdio.h>
+int
+local_var(int **ptr){
+	int a = 1;  /* ローカル変数を定義 */
+	*ptr = &a;  /* ptrがaを指すようになる */
+	return 0;
+	/*
+	 *  このときスタックにあるローカル変数aは破棄されるので、
+	 *  ptrが指す先がどうなるのか予測できなくなる
+	 */  
+}
+
+int
+main(void){
+	int *ptr;  /* int型のポインタを定義 */
+	local_var(&ptr);  /* 関数内でローカル変数を定義して、それをptrで指す(危険) */
+	printf("%d\n", *ptr);  /* スタック内の破棄されたローカル変数を指す(危険) */
+	return 0;
+}
+```
+- このプログラムを実際に動作させた。
+```bash
+$ gcc -g local_var.c -o local_var
+$ ./local_var 
+1  # 正しい数値が出る
+```
+- 関数内で入れた1がそのまま出力された。
+- 次は、このプログラムに何行か追加してみる。
+```c
+/* 注意：このプログラムは実験用です。意図的なバグが含まれています。 */
+#include <stdio.h>
+int
+local_var(int **ptr){
+	int a = 1;  /* ローカル変数を定義 */
+	*ptr = &a;  /* ptrがaを指すようになる */
+	return 0;
+	/*
+	 *  このときスタックにあるローカル変数aは破棄されるので、
+	 *  ptrが指す先がどうなるのか予測できなくなる
+	 */  
+}
+
+/* 追加した関数 */
+int
+local_var_2(void){
+	int i = 0;  /* 新しいローカル変数を定義 */
+	return 0;
+}
+
+int
+main(void){
+	int *ptr;  /* int型のポインタを定義 */
+	local_var(&ptr);  /* 関数内でローカル変数を定義して、それをptrで指す(危険) */
+	printf("%d\n", *ptr);  /* スタック内の破棄されたローカル変数を指す(危険) */
+
+    /* ここから追加したプログラム */
+	local_var_2();  /* 新しい関数内で別のローカル変数を作成してみる */
+	printf("%d\n", *ptr);  /* もう一度最初に破棄されたローカル変数を指す(危険) */
+	return 0;
+}
+```
+- 新しく別の関数を作り、そこでローカル変数を新しく定義した。
+- このプログラムを実行すると以下のようになる。
+```bash
+$ gcc -g local_var.c -o local_var
+$ ./local_var 
+1  # 正しい数値
+0  # 0に変わってしまった
+```
+- このようにptrが指す先が勝手に書き換わってしまった。
+- これは2つ目の関数がローカル変数を定義したときに、破棄されたローカル変数aがあったメモリが
+  新しく定義されたローカル変数iに上書きされてしまったからだと予想できる。
+
+- 次にGDBを使用して、今回はローカル変数aのあるアドレスの変化を確認してみる。
+
+```text
+(gdb) disas
+Dump of assembler code for function main:
+=> 0x0000000000400499 <+0>:     push   %rbp
+   0x000000000040049a <+1>:     mov    %rsp,%rbp
+   0x000000000040049d <+4>:     sub    $0x10,%rsp
+   0x00000000004004a1 <+8>:     lea    -0x8(%rbp),%rax
+   0x00000000004004a5 <+12>:    mov    %rax,%rdi
+   0x00000000004004a8 <+15>:    call   0x400466 <local_var>
+   0x00000000004004ad <+20>:    mov    -0x8(%rbp),%rax
+   0x00000000004004b1 <+24>:    mov    (%rax),%eax
+   0x00000000004004b3 <+26>:    mov    %eax,%esi
+   0x00000000004004b5 <+28>:    mov    $0x401180,%edi
+   0x00000000004004ba <+33>:    mov    $0x0,%eax
+   0x00000000004004bf <+38>:    call   0x400370 <printf@plt>
+   0x00000000004004c4 <+43>:    call   0x400487 <local_var_2>
+   0x00000000004004c9 <+48>:    mov    -0x8(%rbp),%rax
+   0x00000000004004cd <+52>:    mov    (%rax),%eax
+   0x00000000004004cf <+54>:    mov    %eax,%esi
+   0x00000000004004d1 <+56>:    mov    $0x401180,%edi
+   0x00000000004004d6 <+61>:    mov    $0x0,%eax
+   0x00000000004004db <+66>:    call   0x400370 <printf@plt>
+   0x00000000004004e0 <+71>:    mov    $0x0,%eax
+   0x00000000004004e5 <+76>:    leave
+   0x00000000004004e6 <+77>:    ret
+```
+- プログラムを進めて、local_var()内の int a = 1; のあたりで止めた。
+```text
+   0x000000000040046a <+4>:     mov    %rdi,-0x18(%rbp)
+=> 0x000000000040046e <+8>:     movl   $0x1,-0x4(%rbp)  # 1をaのアドレスに代入している
+   0x0000000000400475 <+15>:    mov    -0x18(%rbp),%rax
+```
+- ここで、aのアドレスを確認する。
+```text
+(gdb) p/x $rbp-4
+$1 = 0x7fffffffdbcc
+```
+- 次に、このアドレスの数値(a)が変わる瞬間を確認する。
+```text
+(gdb) watch *(int *)0x7fffffffdbcc  # aはint型なのでint *にキャスト
+Hardware watchpoint 2: *(int *)0x7fffffffdbcc
+(gdb) continue
+Continuing.
+
+Hardware watchpoint 2: *(int *)0x7fffffffdbcc
+
+Old value = 0
+New value = 1
+local_var (ptr=0x7fffffffdbe8) at local_var.c:6
+6               *ptr = &a;  /* ptrがaを指すようになる */
+(gdb) continue
+Continuing.
+
+Hardware watchpoint 2: *(int *)0x7fffffffdbcc
+
+Old value = 1
+New value = 32767  # printfによってスタックが使われた?ため異常な値に変化
+0x0000000000400366 in ?? ()
+(gdb) continue
+Continuing.
+1
+
+Hardware watchpoint 2: *(int *)0x7fffffffdbcc
+
+Old value = 32767
+New value = 0  # local_var_2()で0に書き換えられた
+local_var_2 () at local_var.c:17
+17              return 0;
+(gdb) continue
+Continuing.
+0
+[Inferior 1 (process 4610) exited normally]
+```
+- このように、一度破棄されたローカル変数のメモリは他の関数によって予期しないタイミングで
+  使われて、異常な動作の原因になる。
+
+- printfでスタックを使うようなので、全部で三回printfを呼び出して実験することにした。
+```c
+/* 省略 */
+int
+main(void){
+	int *ptr;  /* int型のポインタを定義 */
+	local_var(&ptr);  /* 関数内でローカル変数を定義して、それをptrで指す(危険) */
+	printf("%d\n", *ptr);  /* 1回目:スタック内の破棄されたローカル変数を指す(危険) */
+	printf("%d\n", *ptr);  /* 2回目 */
+	local_var_2();  /* 新しい関数内で別のローカル変数を作成してみる */
+	printf("%d\n", *ptr);  /* 3回目 */
+	return 0;
+}
+```
+- 結果は以下のようになった。
+```bash
+$ ./local_var 
+1
+32648  # 2回目のprinfで異常な値に書き換わってしまった
+0
+```
