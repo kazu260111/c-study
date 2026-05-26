@@ -3,22 +3,327 @@
 - ソースコードのライセンスはMITライセンスです。詳しくはLICENSEをご確認ください。
 
 ## 書籍情報
-**書籍名**: ゼロからのTCP/IPプロトコルスタック自作入門
-**著者**: 山本雅也
-**出版社**: マイナビ出版
+- **書籍名**: ゼロからのTCP/IPプロトコルスタック自作入門
+  - **著者**: 山本雅也
+  - **出版社**: マイナビ出版
 
 ### その他の参考書
-**書籍名**: Linuxプログラミングインターフェース
-**著者**: Michael Kerrisk
-**訳者**: 千住　治郎
-**出版社**: オライリー・ジャパン
-- 引用時はTLPIと表記する
+- **書籍名**: Linuxプログラミングインターフェース
+  - **著者**: Michael Kerrisk
+  - **訳者**: 千住　治郎
+  - **出版社**: オライリー・ジャパン
+  - 引用時はTLPIと表記する
 
 # 学習メモ
 - 「ゼロからのTCP/IPプロトコルスタック自作入門」を読みながら学習したことをまとめる
 - 引用したソースコードに自分のコメントをつけることで理解を深める
 - 書籍を読みながらTCP/IPプロトコルスタックを完成させる
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
+
+## step 12 2026-05-26 
+### 今回やったこと(概要)
+- ARPメッセージの入力と応答の実装
+  - ARPメッセージのデータ構造
+  - ARPメッセージの入出力
+
+### 学べたこと(具体的な内容)
+- ARPの基本 (p227)
+  - IPアドレスをEthernetのMACアドレスに変換するプロトコル
+    - 対象のネットワークデバイスのMACアドレスを調べてIPパケットを送信する
+  - ARP自体は様々なネットワークのアドレスに対応できるよう設計されている
+    - 論理アドレス(IPアドレス) -> プロトコルアドレスと呼ばれる
+    - 物理アドレス(MACアドレス) -> ハードウェアアドレスと呼ばれる
+  - IPv6はNDPというICMPv6を利用したプロトコルでアドレスを解決する
+
+- ARPの動作
+  - 送信者がIPパケットを送る際、宛先のMACアドレスが不明な場合ARP要求のメッセージを
+    Ethernet上にブロードキャストで送る。このメッセージはデータリンク上のすべてのノードが
+    受信し、ターゲットプロトコルアドレス(IPアドレス)が一致するノードだけがARP応答の
+    メッセージを送信する。ARP応答はユニキャストでARP要求の送信者に送られ、このとき
+    ターゲットハードウェアアドレスに送信者が求めていた宛先MACアドレスが格納される。
+
+- ARPヘッダの構造
+  - ハードウェアアドレス空間(2byte)
+    - ハードウェアアドレスの種別。EthernetのMACアドレスだと0x0001
+  - プロトコルアドレス空間(2byte)
+    - プロトコルアドレスの種別。IPアドレスだと0x0800
+  - ハードウェアアドレス長(1byte)
+    - ハードウェアアドレスの長さ。EthernetのMACアドレスだと6
+  - プロトコルアドレス長(1byte)
+    - プロトコルアドレスの長さ。IPアドレスだと4
+  - オペレーションコード(2byte)
+    - ARPメッセージの種類。ARP要求は1、ARP応答は2
+
+- ARPのアドレス情報
+  - ARPメッセージはARPヘッダと、可変長のアドレス情報部分に別れている。
+  - 送信者ハードウェアアドレス
+    ARPヘッダのハードウェアアドレス長と同じ長さ。
+  - 送信者プロトコルアドレス
+    ARPヘッダのプロトコルアドレス長と同じ長さ。
+  - ターゲットハードウェアアドレス
+    ARPヘッダのハードウェアアドレス長と同じ長さ。
+  - ターゲットプロトコルアドレス
+    ARPヘッダのプロトコルアドレス長と同じ長さ。
+  
+- ARPヘッダの構造体 (p233)
+
+```c
+/* ARPヘッダの構造体 */
+struct arp_hdr {
+    uint16_t hrd;  /* ハードウェアアドレス空間 */
+    uint16_t pro;  /* プロトコルアドレス空間 */
+    uint8_t hln;  /* ハードウェアアドレス長 */
+    uint8_t pln;  /* プロトコルアドレス長 */
+    uint16_t op;  /* オペレーションコード */
+};
+
+/* ARPメッセージの構造体(Ethernet, IPv4用に設定) */
+/* パディングが入るのを防ぐため、uint8_tを使っている(EthernetのMACアドレスが48bitなので) */
+struct arp_ether_ip {
+    struct arp_hdr hdr;  /* ARPヘッダ */
+    uint8_t sha[ETHER_ADDR_LEN];  /* 送信者ハードウェアアドレス */
+    uint8_t spa[IP_ADDR_LEN];  /* 送信者プロトコルアドレス */
+    uint8_t tha[ETHER_ADDR_LEN];  /* ターゲットハードウェアアドレス */
+    uint8_t tpa[IP_ADDR_LEN];  /* ターゲットプロトコルアドレス */
+};
+
+```
+
+- ARPメッセージの詳細出力 (p234)
+
+```c
+static void
+arp_print(const uint8_t *data, size_t len)
+{
+	struct arp_ether_ip *message;
+	ip_addr_t spa, tpa;
+	char addr[ETHER_ADDR_STR_LEN];
+    /* エラー出力がかぶらないようにする */
+	flockfile(stderr);
+    /* ARPメッセージのバイト列をキャストしてから各フィールドを読み出す */
+	message = (struct arp_ether_ip *)data;
+    /* バイトオーダー変換してから表示 */
+	fprintf(stderr, "	hdr: 0x%04x\n", ntoh16(message->hdr.hrd));
+	fprintf(stderr, "	pro: 0x%04x\n", ntoh16(message->hdr.pro));
+	fprintf(stderr, "	hln: %u\n", message->hdr.hln);
+	fprintf(stderr, "	pln: %u\n", message->hdr.pln);
+    /* バイト列を文字列に変換して出力する */
+	fprintf(stderr, "	sha: %s\n", ether_addr_ntop(message->sha, addr, sizeof(addr)));
+	memcpy(&spa, message->spa, sizeof(spa));
+	fprintf(stderr, "	spa: %s\n", ip_addr_ntop(spa, addr, sizeof(addr)));
+	fprintf(stderr, "	tha: %s\n", ether_addr_ntop(message->tha, addr, sizeof(addr)));
+	memcpy(&tpa, message->tpa, sizeof(tpa));
+	fprintf(stderr, "	tpa: %s\n", ip_addr_ntop(tpa, addr, sizeof(addr)));
+#ifdef HEXDUMP
+	hexdump(stderr, data, len);
+#endif
+    /* エラー出力のロックを解除 */
+	funlockfile(stderr);
+}
+```
+
+- ARPメッセージの入力 (p236)
+
+```c
+static void
+arp_input(const uint8_t *data, size_t len, struct net_device *dev)
+{
+	struct arp_ether_ip *msg;
+	ip_addr_t spa, tpa;
+	struct net_iface *iface;
+
+    /* 受け取ったデータが短ければエラー */
+	if (len < sizeof(*msg)) {
+		errorf("too short");
+		return;
+	}
+    /* ARPメッセージ構造体にキャストして、各フィールドに構造体としてアクセスできるようにする */
+	msg = (struct arp_ether_ip *)data;
+    /* ハードウェアアドレスとその長さをEthernetのものかどうか確認 */
+	if (ntoh16(msg->hdr.hrd) != ARP_HRD_ETHER || msg->hdr.hln != ETHER_ADDR_LEN) {
+		errorf("unsupported hardware address");
+		return;
+	}
+    /* プロトコルアドレスとその長さがIPのものであるかを確認 */
+	if (ntoh16(msg->hdr.pro) != ARP_PRO_IP || msg->hdr.pln != IP_ADDR_LEN) {
+		errorf("unsupported protocol address");
+		return;
+	}
+	debugf("dev=%s, len=%zu", dev->name, len);
+    /* 詳細出力 */
+	arp_print(data, len);
+    /* 送信者IPアドレスとターゲットIPアドレスをコピー */
+	memcpy(&spa, msg->spa, sizeof(spa));
+	memcpy(&tpa, msg->tpa, sizeof(tpa));
+    /* 受信したネットワークデバイスに紐づくIPインターフェースの取得(これは1つだけ紐づいている仕様) */
+	iface = net_device_get_iface(dev, NET_IFACE_FAMILY_IP);
+    /* ターゲットIPアドレスが自分のものなら返信する */
+	if (iface && ((struct ip_iface *)iface)->unicast == tpa) {
+        /* オペレーションコードがARPリクエストであることを確認 */
+		if (ntoh16(msg->hdr.op) == ARP_OP_REQUEST) {
+			arp_reply(iface, msg->sha, spa, msg->sha);
+		}
+	}
+}
+
+```
+
+- ARP応答の送信  (p238)
+
+```c
+static int
+arp_reply(struct net_iface *iface, const uint8_t *tha, ip_addr_t tpa, const uint8_t *dst)
+{
+    /* replyにARP応答メッセージを構築していく */
+	struct arp_ether_ip reply;
+    
+    /* reply.hdrの各フィールドにIP・Ethernet用の値を入れていく */
+	reply.hdr.hrd = hton16(ARP_HRD_ETHER);
+	reply.hdr.pro = hton16(ARP_PRO_IP);
+	reply.hdr.hln = ETHER_ADDR_LEN;
+	reply.hdr.pln = IP_ADDR_LEN;
+    /* オペレーションコードはReply */
+	reply.hdr.op = hton16(ARP_OP_REPLY);
+    /* replyのhdr以外の各フィールドに残りの値を入れていく */
+	memcpy(reply.sha, iface->dev->addr, ETHER_ADDR_LEN);
+    /* ifaceはip_iface *にキャストするとIP関連の値を引き出せる仕様(以前の学習メモを参照) */
+	memcpy(reply.spa, &((struct ip_iface *)iface)->unicast, IP_ADDR_LEN);
+	memcpy(reply.tha, tha, ETHER_ADDR_LEN);
+	memcpy(reply.tpa, &tpa, IP_ADDR_LEN);
+	debugf("dev=%s, len=%zu", iface->dev->name, sizeof(reply));
+    /* メッセージの送信 */
+	return net_device_output(iface->dev, ETHER_TYPE_ARP, (uint8_t *)&reply, sizeof(reply), tha);
+}
+
+```
+- ARPモジュールの初期化 (p239)
+  - arp_init()でnet_protocol_register()を呼び出す(省略)
+
+- 初期化関数の呼び出し  (p240)
+  - net_init()でarp_init()を呼び出すようにする(省略)
+
+### 実行結果
+- 先にmake tapを実行したあと、プログラムを実行した。途中で前回と同様にpingを送っている。
+```bash
+$ ./test/test.exe 2>&1 | tee -i step12.txt
+15:13:58.650 [I] setup: setup protocol stack... (test/test.c:36)
+15:13:58.651 [I] net_init: initialize... (net.c:197)
+15:13:58.651 [I] net_protocol_register: success, type=0x0806 (net.c:173)
+15:13:58.651 [I] net_protocol_register: success, type=0x0800 (net.c:173)
+15:13:58.651 [I] ip_protocol_register: success, protocol=1 (ip.c:155)
+15:13:58.651 [I] net_init: success (net.c:214)
+15:13:58.651 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:51)
+15:13:58.651 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+15:13:58.651 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:106)
+15:13:58.651 [I] net_device_add_iface: success, dev=net0 (net.c:134)
+15:13:58.651 [I] ether_tap_init: name=tap0, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:206)
+15:13:58.651 [I] net_device_register: success, dev=net1, type=0x0002 (net.c:51)
+15:13:58.651 [I] intr_register: success, irq=35 (platform/linux/intr.c:53)
+15:13:58.651 [I] ether_tap_init: success, dev=net1, irq=35 (platform/linux/driver/ether_tap.c:243)
+15:13:58.651 [I] ip_iface_register: dev=net1, 192.0.2.2, 255.255.255.0, 192.0.2.255 (ip.c:106)
+15:13:58.651 [I] net_device_add_iface: success, dev=net1 (net.c:134)
+15:13:58.651 [I] net_run: startup... (net.c:223)
+15:13:58.651 [I] intr_main: start... (platform/linux/intr.c:69)
+15:13:58.651 [I] net_device_open: dev=net1 (net.c:58)
+15:13:58.651 [I] ether_tap_open: dev=net1, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:109)
+15:13:58.651 [I] net_device_open: dev=net0 (net.c:58)
+15:13:58.651 [I] net_run: success (net.c:231)
+15:13:58.651 [D] app_main: press Ctrl+C to terminate (test/test.c:90)
+15:13:58.657 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:13:59.495 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:14:01.804 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:14:01.804 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+15:14:01.804 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:182)
+15:14:01.804 [D] arp_input: dev=net1, len=28 (arp.c:115)
+	hdr: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	sha: 76:a7:3d:a5:47:aa
+	spa: 192.0.2.1
+	tha: 00:00:00:00:00:00
+	tpa: 192.0.2.2
+15:14:01.804 [D] arp_reply: dev=net1, len=28 (arp.c:91)
+15:14:01.804 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:94)
+15:14:01.804 [D] ether_tap_output: dev=net1, type=0x0806, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: 76:a7:3d:a5:47:aa
+	type: 0x0806
+15:14:01.804 [D] ether_tap_input: dev=net1, type=0x0800, len=98 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0800
+15:14:01.804 [D] net_input: dev=net1, type=0x0800, len=84 (net.c:182)
+15:14:01.804 [D] ip_input: dev=net1, len=84 (ip.c:201)
+15:14:01.804 [D] ip_input: permit, dev=net1, iface=192.0.2.2 (ip.c:242)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 84 (payload: 64)
+	   id: 20366
+      offset: 0x4000 [flags=2, offset=0]
+	  ttl: 64
+    protocol: 1
+	  sum: 0x6717
+	  src: 192.0.2.1
+	  dst: 192.0.2.2
+15:14:01.804 [D] icmp_input: 192.0.2.1 => 192.0.2.2, len=64 (icmp.c:115)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x9395
+	id: 7086
+	seq: 1
+15:14:01.804 [D] icmp_output: 192.0.2.2 => 192.0.2.1, len=64 (icmp.c:155)
+	type: 0 (EchoReply)
+	code: 0
+	 sum: 0x9b95
+	id: 7086
+	seq: 1
+15:14:01.804 [D] ip_output: 192.0.2.2 => 192.0.2.1, protocol=1, len=64 (ip.c:321)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 84 (payload: 64)
+	   id: 35363
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0xad81
+	  src: 192.0.2.2
+	  dst: 192.0.2.1
+15:14:01.804 [D] ip_output_device: dev=net1, len=84, target=192.0.2.1 (ip.c:267)
+15:14:01.804 [E] ip_output_device: ARP does not implement (ip.c:273)  # 宛先MACアドレスの解決は未実装
+15:14:01.804 [E] ip_output: ip_output_device() failure (ip.c:347)  # 今の段階だとIPパケット送信は失敗する
+15:14:01.804 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:14:16.150 [D] app_main: terminate (test/test.c:94)
+15:14:16.150 [I] cleanup: cleanup protocol stack... (test/test.c:79)
+15:14:16.150 [I] net_shutdown: shutting down... (net.c:240)
+15:14:16.150 [I] intr_main: terminated (platform/linux/intr.c:96)
+15:14:16.151 [I] net_device_close: dev=net1 (net.c:76)
+15:14:16.151 [I] ether_tap_close: dev=net1 (platform/linux/driver/ether_tap.c:116)
+15:14:16.152 [I] net_device_close: dev=net0 (net.c:76)
+15:14:16.152 [I] net_shutdown: success (net.c:247)
+```
+
+### つまづいたところ
+- 実行時net_device_output関数でtoo longというエラーが出た。
+```text
+14:33:26.087 [E] net_device_output: too long, dev=net1, mtu=0, len=28 (net.c:101)
+```
+- mtuが0になっているので、mtuの初期化に問題があることがわかり、問題の箇所を探すことにした。
+  - 調べたらether_tap_initの関数でnet_device_allocを実行したあと、それぞれのフィールドに
+    値を入れていく処理の一部が欠落していることに気づいた。
+    デバッグ用の情報が役に立ったので、今後はよく注意したいと思った。
+    
+### 感想
+- ARPメッセージがどのようなデータ構造をしているのかがわかった。
+- ARPメッセージはターゲットのノードだけが受け取ることになっているが、仕様上関係ないノードが
+  応答することもでき、これをARPスプーフィングということがわかった。
+  - 攻撃者は送信者のARPテーブルを汚染して送信データの流れを送信者->攻撃者とし、攻撃者はそのデータを
+    正規のウェブサイトなどに転送することで、送信者に気づかれずデータを盗み見ることができる(中間者攻撃)
+    - 特にhttpだと暗号化されないので危険。httpsの利用が重要
+
 
 ## step 11 2026-05-20 
 ### 今回やったこと(概要)
@@ -65,6 +370,19 @@ ether_tap_init(const char *name, const char *addr)
 		errorf("net_device_alloc() failure");
 		return NULL;
 	}
+	dev->type = NET_DEVICE_TYPE_ETHERNET;
+	dev->mtu = ETHER_PAYLOAD_SIZE_MAX;
+	dev->flags = (NET_DEVICE_FLAG_BROADCAST | NET_DEVICE_FLAG_NEED_ARP);
+	dev->hlen = ETHER_HDR_SIZE;
+	dev->alen = ETHER_ADDR_LEN;
+	memcpy(dev->broadcast, ETHER_ADDR_BROADCAST, ETHER_ADDR_LEN);
+	/* addrがNULLでないならアドレスをバイト列に変換して格納 */
+    if (addr) {
+		if (ether_addr_pton(addr, dev->addr) == -1) {
+			errorf("invalid adress, addr=%s", addr);
+			return NULL;
+		}
+	}
     /* ether_tap用の関数を入れておく */
 	dev->ops = &ether_tap_ops;
     /* メモリ確保 */
@@ -73,7 +391,10 @@ ether_tap_init(const char *name, const char *addr)
 		errorf("memory_alloc() failure");
 		return NULL;
 	}
-    /* \0の場所を確実に確保するために、コピーする最大のバイト数を1バイト少なくする */
+    /*
+     * \0の場所を確実に確保するために、コピーする最大のバイト数を1バイト少なくする 
+     * tapはmemory_alloc(関数内でcallocを実行)しているので、ゼロクリアされている
+     */
 	strncpy(tap->name, name, sizeof(tap->name) - 1);
     /* ファイルディスクリプタを-1に(無効) */
 	tap->fd = -1;
