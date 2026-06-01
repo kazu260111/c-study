@@ -20,6 +20,304 @@
 - 書籍を読みながらTCP/IPプロトコルスタックを完成させる
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
+## step 13 2026-06-01 
+### 今回やったこと(概要)
+- ARPキャッシュの実装(p245)
+  
+### 学べたこと(具体的な内容)
+- ARPキャッシュ
+  - 宛先IPアドレスに対応するMACアドレスはARPで解決するが、その結果を一時的に保存するのが
+    ARPキャッシュ(ARPテーブル)
+  - キャッシュの有効時間は大抵数十秒から数分の短い時間が設定される
+  - ARP要求を受信したときにもそのメッセージのデータをもとにARPキャッシュを更新できる
+
+- ARPキャッシュの登録  (p251)
+
+```c
+/* ARPキャッシュ構造体 */
+struct arp_cache {
+    unsigned char state;  /* キャッシュの状態。FREE, RESOLVEDなどの定数 */
+    ip_addr_t pa;  /* プロトコルアドレス(IPアドレス) */
+    uint8_t ha[ETHER_ADDR_LEN];  /* ハードウェアアドレス(EthenetのMACアドレス) */
+    struct timeval timestamp;  /* キャッシュのタイムスタンプ。キャッシュの有効期限に関係 */
+};
+
+static struct arp_cache *
+arp_cache_insert(ip_addr_t pa, const uint8_t *ha)
+{
+	struct arp_cache *cache;
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[ETHER_ADDR_STR_LEN];
+    
+    /* キャッシュ領域を割当てる */ 
+	cache = arp_cache_alloc();
+	if (!cache) {
+		errorf("arp_cache_alloc() failure");
+		return NULL;
+	}
+    
+    /* キャッシュの状態を解決済みに */
+	cache->state = ARP_CACHE_STATE_RESOLVED;
+    /* IPアドレスを設定 /
+	cache->pa = pa;
+    /* ハードウェアアドレスを設定 */
+	memcpy(cache->ha, ha, ETHER_ADDR_LEN);
+    /* 日付を得る(有効期限で使う) */
+	gettimeofday(&cache->timestamp, NULL);
+	debugf("INSERT: pa=%s, ha=%s",
+	    ip_addr_ntop(pa, addr1, sizeof(addr1)), ether_addr_ntop(ha, addr2, sizeof(addr2)));
+	return cache;   
+
+
+```
+- キャッシュ領域の割当  (p252)
+  - ARPキャッシュを走査して未使用の領域があればそれを渡す。
+    - なければ古いキャッシュを消してその領域を渡す。
+
+```c
+static struct arp_cache caches[ARP_CACHE_SIZE];
+
+/* マクロ */
+#define countof(x) ((sizeof(x) / sizeof(x[0])))
+#define tailof(x) (x + countof(x))
+
+static struct arp_cache *
+arp_cache_alloc(void)
+{
+	struct arp_cache *entry, *oldest = NULL;
+	
+    /* リストの走査 */
+    /* tailof(caches)でcaches配列の最後の次の要素になるようマクロが設定されている */
+	for (entry = caches; entry < tailof(caches); entry++) {
+        /* 空いているキャッシュがあるならそれを使う */
+		if (entry->state == ARP_CACHE_STATE_FREE) {
+			return entry;
+		}
+        /* oldestが存在しないか、oldestよりentryの方が古いならoldestを更新 */
+        /* timestampはある時点からの経過時間であることに注意 */
+		if (!oldest || timercmp(&oldest->timestamp, &entry->timestamp, >)) {
+			oldest = entry;
+		}
+	}
+    /* 古いキャッシュを消す */
+	arp_cache_delete(oldest);
+	return oldest;
+}
+
+```
+
+- ARPキャッシュの削除  (p253)
+  - ARPキャッシュの情報を0で埋めたり、状態をFREEにする(省略)
+
+- ARPキャッシュの検索 (p253)
+  - ARPキャッシュのリストを先頭から走査して、FREEかつプロトコルアドレスが一致するものを探す(省略)
+
+- キャッシュの更新  (p254)
+
+```c
+static struct arp_cache *
+arp_cache_update(ip_addr_t pa, const uint8_t *ha)
+{
+	struct arp_cache *cache;
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[ETHER_ADDR_STR_LEN];
+    
+    /* ARPキャッシュを探す */
+	cache = arp_cache_select(pa);
+	if (!cache) {
+		debugf("cache not found");
+		return NULL;
+	}
+    /* 解決済みの状態に設定 */
+	cache->state = ARP_CACHE_STATE_RESOLVED;
+    /* ハードウェアアドレスの設定 */
+	memcpy(cache->ha, ha, ETHER_ADDR_LEN);
+    /* タイムスタンプ(有効期限のため)を設定 */
+	gettimeofday(&cache->timestamp, NULL);
+	debugf("UPDATE: pa=%s, ha=%s",
+	    ip_addr_ntop(pa, addr1, sizeof(addr1)), ether_addr_ntop(ha, addr2, sizeof(addr2)));
+	return cache;
+}
+
+```
+
+- ARPキャッシュへの反映  (p255)
+
+```c
+static void
+arp_input(const uint8_t *data, size_t len, struct net_device *dev)
+{
+    /* 省略 */
+    /* キャッシュの更新フラグを初期化 */
+	int merge = 0;
+    /* 省略 */
+    /* ロックする */
+	lock_acquire(&lock);
+    /*
+     * (参考)ここで悪意ある人がIPを偽装して同じネットワーク内でARPを送ると
+     * ARPキャッシュが汚染されてしまう(ARPスプーフィング)
+     */
+    /* キャッシュが見つかった場合、キャッシュを更新する(知っている相手なら更新) */
+	if (arp_cache_update(spa, msg->sha)) {
+		/* update */
+		merge = 1;
+	}
+    /* ロック解除 */
+	lock_release(&lock);
+	iface = net_device_get_iface(dev, NET_IFACE_FAMILY_IP);
+    /* ARPメッセージが自分宛てだった場合 */
+	if (iface && ((struct ip_iface *)iface)->unicast == tpa) {
+        /* キャッシュがまだ更新されていないなら登録 */
+		if (!merge) {
+			lock_acquire(&lock);
+            /* ARPキャッシュの登録 */
+			arp_cache_insert(spa, msg->sha);
+			lock_release(&lock);
+		}
+        /* ARPがリクエストなら返信する */
+		if (ntoh16(msg->hdr.op) == ARP_OP_REQUEST) {
+			arp_reply(iface, msg->sha, spa, msg->sha);
+		}
+	}
+}
+```
+
+-  (p)
+
+```c
+
+```
+
+
+### 実行結果
+- make tapを実行したあとにテストプログラムを実行した。
+- 途中で以下のようにpingを送り、応答があった。
+```bash
+$ ping -c 1 192.0.2.2
+PING 192.0.2.2 (192.0.2.2) 56(84) バイトのデータ
+64 バイト応答 送信元 192.0.2.2: icmp_seq=1 ttl=255 時間=0.601 ミリ秒
+
+--- 192.0.2.2 ping 統計 ---
+送信パケット数 1, 受信パケット数 1, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 0.601/0.601/0.601/0.000 ms
+```
+- テストプログラムの実行
+```bash
+$ ./test/test.exe 2>&1 | tee -i step13.txt
+17:51:04.007 [I] setup: setup protocol stack... (test/test.c:36)
+17:51:04.007 [I] net_init: initialize... (net.c:197)
+17:51:04.007 [I] intr_register: success, irq=14 (platform/linux/intr.c:53)
+17:51:04.007 [I] net_protocol_register: success, type=0x0806 (net.c:173)
+17:51:04.007 [I] timer_register: success, interval={1, 0} (platform/linux/timer.c:40)
+17:51:04.007 [I] net_protocol_register: success, type=0x0800 (net.c:173)
+17:51:04.007 [I] ip_protocol_register: success, protocol=1 (ip.c:156)
+17:51:04.007 [I] net_init: success (net.c:214)
+17:51:04.007 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:51)
+17:51:04.007 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+17:51:04.007 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:107)
+17:51:04.007 [I] net_device_add_iface: success, dev=net0 (net.c:134)
+17:51:04.007 [I] ether_tap_init: name=tap0, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:206)
+17:51:04.007 [I] net_device_register: success, dev=net1, type=0x0002 (net.c:51)
+17:51:04.007 [I] intr_register: success, irq=35 (platform/linux/intr.c:53)
+17:51:04.007 [I] ether_tap_init: success, dev=net1, irq=35 (platform/linux/driver/ether_tap.c:243)
+17:51:04.007 [I] ip_iface_register: dev=net1, 192.0.2.2, 255.255.255.0, 192.0.2.255 (ip.c:107)
+17:51:04.007 [I] net_device_add_iface: success, dev=net1 (net.c:134)
+17:51:04.007 [I] net_run: startup... (net.c:223)
+17:51:04.008 [I] intr_main: start... (platform/linux/intr.c:69)
+17:51:04.010 [I] timer_run: interval={0, 1000000}, initial={0, 1000000} (platform/linux/timer.c:87)
+17:51:04.010 [I] net_device_open: dev=net1 (net.c:58)
+17:51:04.011 [I] ether_tap_open: dev=net1, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:109)
+17:51:04.011 [I] net_device_open: dev=net0 (net.c:58)
+17:51:04.011 [I] net_run: success (net.c:231)
+17:51:04.011 [D] app_main: press Ctrl+C to terminate (test/test.c:90)
+17:51:04.017 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+17:51:04.415 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+17:51:10.509 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+17:51:10.509 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+17:51:10.509 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:182)
+17:51:10.509 [D] arp_input: dev=net1, len=28 (arp.c:229)
+	hdr: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	sha: 76:a7:3d:a5:47:aa
+	spa: 192.0.2.1
+	tha: 00:00:00:00:00:00
+	tpa: 192.0.2.2
+17:51:10.509 [D] arp_cache_update: cache not found (arp.c:158)
+17:51:10.509 [D] arp_cache_insert: INSERT: pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:185)
+17:51:10.509 [D] arp_reply: dev=net1, len=28 (arp.c:204)
+17:51:10.509 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:94)
+17:51:10.509 [D] ether_tap_output: dev=net1, type=0x0806, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: 76:a7:3d:a5:47:aa
+	type: 0x0806
+17:51:10.509 [D] ether_tap_input: dev=net1, type=0x0800, len=98 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0800
+17:51:10.509 [D] net_input: dev=net1, type=0x0800, len=84 (net.c:182)
+17:51:10.509 [D] ip_input: dev=net1, len=84 (ip.c:202)
+17:51:10.509 [D] ip_input: permit, dev=net1, iface=192.0.2.2 (ip.c:243)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 84 (payload: 64)
+	   id: 12937
+      offset: 0x4000 [flags=2, offset=0]
+	  ttl: 64
+    protocol: 1
+	  sum: 0x841c
+	  src: 192.0.2.1
+	  dst: 192.0.2.2
+17:51:10.509 [D] icmp_input: 192.0.2.1 => 192.0.2.2, len=64 (icmp.c:115)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x7b19
+	id: 55452
+	seq: 1
+17:51:10.509 [D] icmp_output: 192.0.2.2 => 192.0.2.1, len=64 (icmp.c:155)
+	type: 0 (EchoReply)
+	code: 0
+	 sum: 0x8319
+	id: 55452
+	seq: 1
+17:51:10.509 [D] ip_output: 192.0.2.2 => 192.0.2.1, protocol=1, len=64 (ip.c:325)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 84 (payload: 64)
+	   id: 60466
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x4b72
+	  src: 192.0.2.2
+	  dst: 192.0.2.1
+17:51:10.509 [D] ip_output_device: dev=net1, len=84, target=192.0.2.1 (ip.c:269)
+17:51:10.509 [D] arp_resolve: resolved, pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:277)
+17:51:10.509 [D] net_device_output: dev=net1, type=0x0800, len=84 (net.c:94)
+17:51:10.509 [D] ether_tap_output: dev=net1, type=0x0800, len=98 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: 76:a7:3d:a5:47:aa
+	type: 0x0800
+17:51:10.509 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+17:51:15.824 [D] app_main: terminate (test/test.c:94)
+17:51:15.824 [I] cleanup: cleanup protocol stack... (test/test.c:79)
+17:51:15.824 [I] net_shutdown: shutting down... (net.c:240)
+17:51:15.824 [I] intr_main: terminated (platform/linux/intr.c:96)
+17:51:15.824 [I] net_device_close: dev=net1 (net.c:76)
+17:51:15.824 [I] ether_tap_close: dev=net1 (platform/linux/driver/ether_tap.c:116)
+17:51:15.825 [I] net_device_close: dev=net0 (net.c:76)
+17:51:15.825 [I] net_shutdown: success (net.c:247)
+```
+### 感想
+- sizeof()で配列全体の大きさを調べ、配列の一要素の大きさで割って配列の要素数を計算して、
+  tailof(配列の最後尾の次のアドレス)を求める方法を学べた。
+
+
+
 ## step 12 2026-05-26 
 ### 今回やったこと(概要)
 - ARPメッセージの入力と応答の実装
