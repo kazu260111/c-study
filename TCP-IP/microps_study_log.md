@@ -71,8 +71,9 @@ arp_cache_insert(ip_addr_t pa, const uint8_t *ha)
 
 ```
 - キャッシュ領域の割当  (p252)
-  - ARPキャッシュを走査して未使用の領域があればそれを渡す。
-    - なければ古いキャッシュを消してその領域を渡す。
+  - ARPキャッシュを走査して未使用の領域があればそれを渡す
+    - なければ古いキャッシュを消してその領域を渡す
+    - キャッシュは配列になっていることに注意
 
 ```c
 static struct arp_cache caches[ARP_CACHE_SIZE];
@@ -181,13 +182,81 @@ arp_input(const uint8_t *data, size_t len, struct net_device *dev)
 	}
 }
 ```
+- 古くなったARPキャッシュを自動で削除するタイマーの処理を実装する
+- タイマー登録(p256)
+  - timer_registerを呼び出す関数をarp_initに追加(省略)
 
--  (p)
+- タイマーハンドラ (p257)
 
 ```c
+static void
+arp_timer(void)
+{
+	struct arp_cache *entry;
+	struct timeval now, diff;
+
+    /* ロック */
+	lock_acquire(&lock);
+	gettimeofday(&now, NULL);
+    /* リストを走査して、FREEでないかつ静的な登録でないキャッシュの日付をチェックしていく */
+	for (entry = caches; entry < tailof(caches); entry++) {
+		if (entry->state != ARP_CACHE_STATE_FREE && entry->state != ARP_CACHE_STATE_STATIC) {
+			timersub(&now, &entry->timestamp, &diff);
+            /* 有効期限が切れていたらキャッシュを削除する */
+			if (ARP_CACHE_TIMEOUT < diff.tv_sec) {
+				arp_cache_delete(entry);
+			}
+		}
+	}
+	lock_release(&lock);
+}
+
+```
+- タイマー機構の組み込み(p258)
+  - タイマーを呼び出す関数の実装(省略)
+
+- アドレス解決の実行関数  (p259)
+
+```c
+int
+arp_resolve(struct net_iface *iface, ip_addr_t pa, uint8_t *ha)
+{
+	struct arp_cache *cache;
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[ETHER_ADDR_STR_LEN];
+
+    /* Ethernetタイプでないならエラー */
+	if (iface->dev->type != NET_DEVICE_TYPE_ETHERNET) {
+		debugf("unsupported hardware address type");
+		return ARP_RESOLVE_ERROR;
+	}
+    /* IPv4でないならエラー */
+	if (iface->family != NET_IFACE_FAMILY_IP) {
+		debugf("unsupported protocol address type");
+		return ARP_RESOLVE_ERROR;
+	}
+    /* ロック */
+	lock_acquire(&lock);
+    /* キャッシュをプロトコルアドレス(IPアドレス)で走査 */
+	cache = arp_cache_select(pa);
+	if (!cache) {
+		debugf("cache not found, pa=%s", ip_addr_ntop(pa, addr1, sizeof(addr1)));
+		lock_release(&lock);
+		return ARP_RESOLVE_ERROR;
+	}
+    /* ハードウェアアドレスを設定 */
+	memcpy(ha, cache->ha, ETHER_ADDR_LEN);
+    /* ロック解除 */
+	lock_release(&lock);
+	debugf("resolved, pa=%s, ha=%s",
+	    ip_addr_ntop(pa, addr1, sizeof(addr1)), ether_addr_ntop(ha, addr2, sizeof(addr2)));
+	return ARP_RESOLVE_FOUND;
+}
 
 ```
 
+- IPモジュールからアドレス解決の実行 (p260)
+  - ip_output_device()でarp_resolveを実行し、アドレス解決をする(省略)
 
 ### 実行結果
 - make tapを実行したあとにテストプログラムを実行した。
@@ -315,8 +384,9 @@ $ ./test/test.exe 2>&1 | tee -i step13.txt
 ### 感想
 - sizeof()で配列全体の大きさを調べ、配列の一要素の大きさで割って配列の要素数を計算して、
   tailof(配列の最後尾の次のアドレス)を求める方法を学べた。
-
-
+- ARPキャッシュのしくみ(有効期限の存在や更新のしくみ)が理解できた。
+  - 自分宛てでないARP要求でも送信元のアドレスをキャッシュの更新に利用する(すでにキャッシュにあるアドレスの場合)
+    ということが学べた。
 
 ## step 12 2026-05-26 
 ### 今回やったこと(概要)
