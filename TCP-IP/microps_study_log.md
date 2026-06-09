@@ -20,6 +20,322 @@
 - 書籍を読みながらTCP/IPプロトコルスタックを完成させる
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
+## step 15 2026-06-08 
+### 今回やったこと(概要)
+- 受信パケットの遅延処理(p275)
+  - ハードウェア割り込みの処理を短縮
+- ソフトウェア割り込みの再現
+
+### 学べたこと(具体的な内容)
+
+- 受信パケットをキューに格納 (p282)
+  - ネットワークデバイスから受け取ったパケットをプロトコルごとのキューに格納するよう変更
+```c
+int
+net_input(uint16_t type, const uint8_t *data, size_t len, struct net_device *dev)
+{
+    /* 省略 */
+	for (proto = protocols; proto; proto = proto->next) {
+		if (proto->type == type) {
+            /* キューに格納する */
+			if (!net_protocol_queue_push(proto, data, len, dev)) {
+				errorf("net_protocol_queue_push() failure");
+				return -1;
+			}
+            /* ソフトウェア割り込み */
+			intr_raise(INTR_IRQ_SOFT);
+			return 0;
+		}
+	}
+	/* unsupported protocol */
+	return 0;
+}
+```
+
+- 受信したキューにパケットを追加  (p282)
+
+```c
+struct net_protocol_queue_entry {
+    struct queue_entry entry;
+    struct net_device *dev;
+    size_t len;
+    /* data bytes exists after this structure. */
+    /* lenの後にデータが格納される */
+};
+
+static struct net_protocol_queue_entry *
+net_protocol_queue_push(struct net_protocol *proto, const uint8_t *data, size_t len, struct net_device *dev)
+{
+	struct net_protocol_queue_entry *entry;
+    
+    /* entry+データの分のメモリを確保 */
+	entry = memory_alloc(sizeof(*entry) + len);
+	if (!entry) {
+		errorf("memory_alloc() failure");
+		return NULL;
+	}
+    /* 構造体の各フィールドを設定 */
+	entry->dev = dev;
+	entry->len = len;
+    /* 構造体の先(lenの次)にデータを置く */
+	memcpy(entry + 1, data, len);
+    /* ロック */
+	lock_acquire(&proto->lock);
+    /* キューにプッシュ */
+	if (!queue_push(&proto->queue, (struct queue_entry *)entry)) {
+        /* 失敗したらロックを解除 */
+		lock_release(&proto->lock);
+		return NULL;
+	}
+	debugf("success, proto=0x%04x queue.num=%d", proto->type, proto->queue.num);
+    /* ロックを解除 */
+	lock_release(&proto->lock);
+	return entry;
+}
+```
+
+- 割り込みハンドラの作成  (p284)
+
+```c
+void
+net_softirq_handler(unsigned int irq, void *arg)
+{
+	struct net_protocol *proto;
+	struct net_protocol_queue_entry *entry;
+
+    /* 今回未使用の変数 */
+	(void)irq;
+	(void)arg;
+    /* プロトコルリストの走査 */
+	for (proto = protocols; proto; proto = proto->next) {
+		while (1) {
+            /* キューから取り出す */
+			entry = net_protocol_queue_pop(proto);
+			if (!entry) {
+				break;
+			}
+            /* データと関連情報ををプロトコルの入力ハンドラに渡す */
+			proto->handler((uint8_t *)(entry + 1), entry->len, entry->dev);
+            /* 処理が終わったらメモリを解放 */
+			memory_free(entry);
+		}
+	}
+}
+```
+
+- 割り込みハンドラの登録  (p285)
+  - platform_init()にソフトウェア割り込みが発生したときに呼び出す割り込みハンドラを登録する(platform/linux/platform.c)
+    - 省略
+
+- 受信キューからパケットを取り出す関数  (p286)
+
+```c
+static struct net_protocol_queue_entry *
+net_protocol_queue_pop(struct net_protocol *proto)
+{
+	struct net_protocol_queue_entry *entry;
+
+    /* ロック */
+	lock_acquire(&proto->lock);
+    /* キューから取り出す */
+	entry = (struct net_protocol_queue_entry *)queue_pop(&proto->queue);
+	if (!entry) {
+        /* ロックの解除 */
+		lock_release(&proto->lock);
+		return NULL;
+	}
+	debugf("success, proto=0x%04x queue.num=%d", proto->type, proto->queue.num);
+    /* ロックの解除 */
+	lock_release(&proto->lock);
+	return entry;
+}
+
+```
+### 実行結果
+前回までのようにmake tapを実行後、テストプログラムを実行した。
+```bash
+$ ./test/test.exe 2>&1 | tee -i step15.txt
+15:16:17.974 [I] setup: setup protocol stack... (test/test.c:37)
+15:16:17.974 [I] net_init: initialize... (net.c:274)
+15:16:17.974 [I] intr_register: success, irq=10 (platform/linux/intr.c:53)
+15:16:17.974 [I] intr_register: success, irq=14 (platform/linux/intr.c:53)
+15:16:17.974 [I] net_protocol_register: success, type=0x0806 (net.c:186)
+15:16:17.974 [I] timer_register: success, interval={1, 0} (platform/linux/timer.c:40)
+15:16:17.974 [I] net_protocol_register: success, type=0x0800 (net.c:186)
+15:16:17.974 [I] ip_protocol_register: success, protocol=1 (ip.c:156)
+15:16:17.974 [I] net_init: success (net.c:291)
+15:16:17.974 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:62)
+15:16:17.974 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+15:16:17.974 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:107)
+15:16:17.974 [I] net_device_add_iface: success, dev=net0 (net.c:145)
+15:16:17.974 [I] ether_tap_init: name=tap0, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:206)
+15:16:17.974 [I] net_device_register: success, dev=net1, type=0x0002 (net.c:62)
+15:16:17.974 [I] intr_register: success, irq=35 (platform/linux/intr.c:53)
+15:16:17.974 [I] ether_tap_init: success, dev=net1, irq=35 (platform/linux/driver/ether_tap.c:243)
+15:16:17.974 [I] ip_iface_register: dev=net1, 192.0.2.2, 255.255.255.0, 192.0.2.255 (ip.c:107)
+15:16:17.974 [I] net_device_add_iface: success, dev=net1 (net.c:145)
+15:16:17.974 [I] net_run: startup... (net.c:300)
+15:16:17.974 [I] intr_main: start... (platform/linux/intr.c:69)
+15:16:17.974 [I] timer_run: interval={0, 1000000}, initial={0, 1000000} (platform/linux/timer.c:87)
+15:16:17.974 [I] net_device_open: dev=net1 (net.c:69)
+15:16:17.974 [I] ether_tap_open: dev=net1, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:109)
+15:16:17.974 [I] net_device_open: dev=net0 (net.c:69)
+15:16:17.974 [I] net_run: success (net.c:308)
+15:16:17.974 [D] app_main: press Ctrl+C to terminate (test/test.c:99)
+15:16:17.974 [D] icmp_output: 192.0.2.2 => 192.0.2.1, len=12 (icmp.c:155)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x4077
+	id: 4078
+	seq: 1
+15:16:17.974 [D] ip_output: 192.0.2.2 => 192.0.2.1, protocol=1, len=12 (ip.c:325)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 45835
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x84cd
+	  src: 192.0.2.2
+	  dst: 192.0.2.1
+15:16:17.974 [D] ip_output_device: dev=net1, len=32, target=192.0.2.1 (ip.c:269)
+15:16:17.974 [D] arp_resolve: cache not found, pa=192.0.2.1 (arp.c:292)
+15:16:17.974 [D] arp_request: dev=net1, len=28 (arp.c:205)
+	hrd: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	op: 1 (Request)
+	sha: 00:00:5e:00:53:01
+	spa: 192.0.2.2
+	tha: 00:00:00:00:00:00
+	tpa: 192.0.2.1
+15:16:17.974 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:105)
+15:16:17.974 [D] ether_tap_output: dev=net1, type=0x0806, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+15:16:17.978 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:16:18.825 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:16:18.975 [D] icmp_output: 192.0.2.2 => 192.0.2.1, len=12 (icmp.c:155)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x4076
+	id: 4078
+	seq: 2
+15:16:18.975 [D] ip_output: 192.0.2.2 => 192.0.2.1, protocol=1, len=12 (ip.c:325)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 47841
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x7cf7
+	  src: 192.0.2.2
+	  dst: 192.0.2.1
+15:16:18.975 [D] ip_output_device: dev=net1, len=32, target=192.0.2.1 (ip.c:269)
+15:16:18.975 [D] arp_request: dev=net1, len=28 (arp.c:205)
+	hrd: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	op: 1 (Request)
+	sha: 00:00:5e:00:53:01
+	spa: 192.0.2.2
+	tha: 00:00:00:00:00:00
+	tpa: 192.0.2.1
+15:16:18.975 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:105)
+15:16:18.975 [D] ether_tap_output: dev=net1, type=0x0806, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+15:16:18.975 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:16:18.975 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0806
+15:16:18.975 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:235)
+15:16:18.975 [D] net_protocol_queue_push: success, proto=0x0806 queue.num=1 (net.c:224)
+15:16:18.975 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+15:16:18.975 [D] net_protocol_queue_pop: success, proto=0x0806 queue.num=0 (net.c:201)
+15:16:18.975 [D] arp_input: dev=net1, len=28 (arp.c:250)
+	hrd: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	op: 2 (Reply)
+	sha: 76:a7:3d:a5:47:aa
+	spa: 192.0.2.1
+	tha: 00:00:5e:00:53:01
+	tpa: 192.0.2.2
+15:16:18.975 [D] arp_cache_update: UPDATE: pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:165)
+15:16:19.975 [D] icmp_output: 192.0.2.2 => 192.0.2.1, len=12 (icmp.c:155)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x4075
+	id: 4078
+	seq: 3
+15:16:19.975 [D] ip_output: 192.0.2.2 => 192.0.2.1, protocol=1, len=12 (ip.c:325)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 247
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x36e2
+	  src: 192.0.2.2
+	  dst: 192.0.2.1
+15:16:19.975 [D] ip_output_device: dev=net1, len=32, target=192.0.2.1 (ip.c:269)
+15:16:19.975 [D] arp_resolve: resolved, pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:310)
+15:16:19.975 [D] net_device_output: dev=net1, type=0x0800, len=32 (net.c:105)
+15:16:19.975 [D] ether_tap_output: dev=net1, type=0x0800, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: 76:a7:3d:a5:47:aa
+	type: 0x0800
+15:16:19.975 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:16:19.975 [D] ether_tap_input: dev=net1, type=0x0800, len=46 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0800
+15:16:19.975 [D] net_input: dev=net1, type=0x0800, len=32 (net.c:235)
+15:16:19.975 [D] net_protocol_queue_push: success, proto=0x0800 queue.num=1 (net.c:224)
+15:16:19.975 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+15:16:19.975 [D] net_protocol_queue_pop: success, proto=0x0800 queue.num=0 (net.c:201)
+15:16:19.975 [D] ip_input: dev=net1, len=32 (ip.c:202)
+15:16:19.975 [D] ip_input: permit, dev=net1, iface=192.0.2.2 (ip.c:243)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 34188
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 64
+    protocol: 1
+	  sum: 0x714d
+	  src: 192.0.2.1
+	  dst: 192.0.2.2
+15:16:19.975 [D] icmp_input: 192.0.2.1 => 192.0.2.2, len=12 (icmp.c:115)
+	type: 0 (EchoReply)
+	code: 0
+	 sum: 0x4875
+	id: 4078
+	seq: 3
+15:16:20.301 [D] app_main: terminate (test/test.c:108)
+15:16:20.301 [I] cleanup: cleanup protocol stack... (test/test.c:80)
+15:16:20.301 [I] net_shutdown: shutting down... (net.c:317)
+15:16:20.301 [I] intr_main: terminated (platform/linux/intr.c:96)
+15:16:20.301 [I] net_device_close: dev=net1 (net.c:87)
+15:16:20.301 [I] ether_tap_close: dev=net1 (platform/linux/driver/ether_tap.c:116)
+15:16:20.302 [I] net_device_close: dev=net0 (net.c:87)
+15:16:20.302 [I] net_shutdown: success (net.c:324)
+```
+
+### 感想
+- ロックを得たあとはできるだけ処理を短くして重い処理を書かないようにするのが重要だと思った
+- メモリ確保時に構造体とデータ部分を一緒に確保して、ポインタ演算でデータ部分にアクセスする方法について学べた
+
 ## step 14 2026-06-05 
 ### 今回やったこと(概要)
 - ARP要求メッセージの送信 (p265)
