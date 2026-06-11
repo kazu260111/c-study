@@ -20,6 +20,389 @@
 - 書籍を読みながらTCP/IPプロトコルスタックを完成させる
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
+## step 16 2026-06-10 
+### 今回やったこと(概要)
+- ルーティング機能の追加(p291)
+
+### 学べたこと(具体的な内容)
+- 異なるデータリンクのノードにIPパケットを送信するとき、ルータを介して目的のノードに送信する
+  - 同じデータリンクでもルータを介して接続しているなら、パケットはルータを中継する
+- 送信元は最終的に宛先ノードのアドレスとIPパケットを届けるために直接データを渡すルータ(ネクストホップ)のアドレスを知っていれば良い
+  - ルーティングテーブルに宛先ネットワークのアドレスとネクストホップのIPアドレスをデータベースにしている
+
+
+- ルーティングテーブルの実装  (p295)
+  - ルーティングテーブルに経路を追加する
+```c
+struct ip_route {
+    struct ip_route *next;  /* リストの次の要素 */
+    ip_addr_t network;  /* ネットワークアドレス */
+    ip_addr_t netmask;  /* サブネットマスク */
+    ip_addr_t nexthop;  /* ネクストホップ */
+    struct ip_iface *iface;  /* 送信インターフェース */
+};
+
+
+/*
+ * NOTE: must not be call after net_run()
+ */
+static struct ip_route *
+ip_route_add(ip_addr_t network, ip_addr_t netmask, ip_addr_t nexthop, struct ip_iface *iface)
+{
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[IP_ADDR_STR_LEN];
+	char addr3[IP_ADDR_STR_LEN];
+	char addr4[IP_ADDR_STR_LEN];
+	struct ip_route *route;
+    
+    /* ネクストホップがANYキャストでないなら */
+	if (nexthop != IP_ADDR_ANY) {
+        /* 情報表示 */
+		infof("%s/%s via %s dev %s src %s",
+		   ip_addr_ntop(network, addr1, sizeof(addr1)),
+		   ip_addr_ntop(netmask, addr2, sizeof(addr2)),
+		   ip_addr_ntop(nexthop, addr3, sizeof(addr3)),
+		   NET_IFACE(iface)->dev->name,
+		   ip_addr_ntop(iface->unicast, addr4, sizeof(addr4)));
+	}
+    /* ネクストホップがANYキャストなら */
+	else {
+		infof("%s/%s dev %s src %s",
+		   ip_addr_ntop(network, addr1, sizeof(addr1)),
+		   ip_addr_ntop(netmask, addr2, sizeof(addr2)),
+		   NET_IFACE(iface)->dev->name,
+		   ip_addr_ntop(iface->unicast, addr4, sizeof(addr4)));
+	}
+    /* 新経路のメモリ確保 */
+	route = memory_alloc(sizeof(*route));
+	if (!route) {
+		errorf("memory_alloc() failure");
+		return NULL;
+	}
+    /* 経路情報の設定 */
+	route->network = network;
+	route->netmask = netmask;
+	route->nexthop = nexthop;
+	route->iface = iface;
+	route->next = routes;
+	routes = route;
+	return route;
+}
+
+```
+
+- 経路の探索(p298)
+
+```c
+static struct ip_route *
+ip_route_lookup(ip_addr_t dst)
+{
+	struct ip_route *route, *candidate = NULL;
+
+    /* 経路リストの走査 */
+	for (route = routes; route; route = route->next) {
+        /* 宛先IPアドレスが経路のネットワークアドレスに含まれるかチェック */
+		if ((dst & route->netmask) == route->network) {
+            /* 
+             * 経路の候補がまだないか、検討中の候補のネットマスクが既存の候補のネットマスクより
+             * 長ければ経路の候補を更新する(ロンゲストマッチ)
+             * 大小の比較をするときはホストバイトオーダーにエンディアンを変更する必要がある
+             */
+			if (!candidate || ntoh32(candidate->netmask) < ntoh32(route->netmask)) {
+                /* 候補の更新 */
+				candidate = route;
+			}
+		}
+	}
+	return candidate;
+}
+```
+
+- トランスポート層への機能提供  (p299)
+  - 宛先IPアドレスに対する経路で使うIPインターフェースを取得できるようにする(省略)
+
+- 直結ネットワークの経路の自動登録(p300)
+  - 同じネットワークへの経路を登録する
+
+```c
+int
+ip_iface_register(struct net_device *dev, struct ip_iface *iface)
+{
+    /* 省略 */
+    /* ネットワークデバイスとIPインターフェースの紐づけ */
+	if (net_device_add_iface(dev, NET_IFACE(iface)) == -1) {
+		errorf("net_device_add_iface() failure");
+		return -1;
+	}
+    /* 直結ネットワークの経路を登録する */
+	if (!ip_route_add(iface->unicast & iface->netmask, iface->netmask, IP_ADDR_ANY, iface)) {
+		errorf("ip_route_add() failure");
+		return -1;
+	}
+	iface->next = ifaces;
+	ifaces = iface;
+	return 0;
+}
+```
+
+- デフォルトルートの設定 (p301)
+  - デフォルトのルート(0.0.0.0/0)の経路を作成する
+
+```c
+/*
+ * NOTE: must not be call after net_run()
+ */
+int
+ip_route_set_default_gateway(struct ip_iface *iface, const char *gateway)
+{
+	ip_addr_t nexthop;
+    /* デフォルトゲートウェイのアドレスをネクストホップに指定 */
+	if (ip_addr_pton(gateway, &nexthop) == -1) {
+		errorf("ip_addr_pton() failure, addr=%s", nexthop);
+		return -1;
+	}
+    /* 経路作成 */
+	if (!ip_route_add(IP_ADDR_ANY, IP_ADDR_ANY, nexthop, iface)) {
+		errorf("ip_route_add() failure");
+		return -1;
+	}
+	return 0;
+}
+
+```
+
+- IPパケット送信時の経路選択  (p302)
+
+```c
+ssize_t
+ip_output(uint8_t protocol, const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst)
+{
+	char addr1[IP_ADDR_STR_LEN];
+	char addr2[IP_ADDR_STR_LEN];
+	struct ip_route *route;
+    /* 省略 */
+    /* 送信元アドレスが指定されず、宛先がリミテッドブロードキャストアドレスならエラー */
+	if (src == IP_ADDR_ANY && dst == IP_ADDR_BROADCAST) {
+		errorf("source address is required for broadcast addresses");
+		return -1;
+	}
+    /* 経路を探す */
+	route = ip_route_lookup(dst);
+	if (!route) {
+		errorf("no route to host, dst=%s", addr2);
+		return -1;
+	}
+	iface = route->iface;
+    /* 送信元アドレスが指定されておらず、インターフェースのユニキャストアドレスと違う場合エラー */
+	if (src != IP_ADDR_ANY && src != iface->unicast) {
+		errorf("unable to output with specified source address, src=%s", addr1);
+		return -1;
+	}
+    /* 省略 */
+    /* ネクストホップがあるならそちらを優先指定 */
+	if (ip_output_device(iface, buf, plen, route->nexthop ? route->nexthop : dst) == -1) {
+		errorf("ip_output_device() failure");
+		return -1;
+	}
+	return plen;
+}
+```
+- テストプログラムの変更(p303)
+  - app_main()に宛先テストとしてGoogleのPublic DNS Serverのアドレス8.8.8.8を使う(他、省略)
+
+### 実行結果
+テストプログラムを動かすために、make tap実行後にLinuxをルータとして働かせるための設定を行う。(p305)
+```bash
+$ sudo bash -c "echo 1 > /proc/sys/net/ipv4/ip_forward"
+$ sudo iptables -A FORWARD -o tap0 -j ACCEPT
+$ sudo iptables -A FORWARD -i tap0 -j ACCEPT
+$ sudo iptables -t nat -A POSTROUTING -s 192.0.2.0/24 -o ${device} -j MASQUERADE
+```
+```bash
+$ ./test/test.exe 2>&1 | tee -i step16.txt
+15:16:17.974 [I] setup: setup protocol stack... (test/test.c:37)
+15:16:17.974 [I] net_init: initialize... (net.c:274)
+15:16:17.974 [I] intr_register: success, irq=10 (platform/linux/intr.c:53)
+15:16:17.974 [I] intr_register: success, irq=14 (platform/linux/intr.c:53)
+15:16:17.974 [I] net_protocol_register: success, type=0x0806 (net.c:186)
+15:16:17.974 [I] timer_register: success, interval={1, 0} (platform/linux/timer.c:40)
+15:16:17.974 [I] net_protocol_register: success, type=0x0800 (net.c:186)
+15:16:17.974 [I] ip_protocol_register: success, protocol=1 (ip.c:156)
+15:16:17.974 [I] net_init: success (net.c:291)
+15:16:17.974 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:62)
+15:16:17.974 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+15:16:17.974 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:107)
+15:16:17.974 [I] net_device_add_iface: success, dev=net0 (net.c:145)
+15:16:17.974 [I] ether_tap_init: name=tap0, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:206)
+15:16:17.974 [I] net_device_register: success, dev=net1, type=0x0002 (net.c:62)
+15:16:17.974 [I] intr_register: success, irq=35 (platform/linux/intr.c:53)
+15:16:17.974 [I] ether_tap_init: success, dev=net1, irq=35 (platform/linux/driver/ether_tap.c:243)
+15:16:17.974 [I] ip_iface_register: dev=net1, 192.0.2.2, 255.255.255.0, 192.0.2.255 (ip.c:107)
+15:16:17.974 [I] net_device_add_iface: success, dev=net1 (net.c:145)
+15:16:17.974 [I] net_run: startup... (net.c:300)
+15:16:17.974 [I] intr_main: start... (platform/linux/intr.c:69)
+15:16:17.974 [I] timer_run: interval={0, 1000000}, initial={0, 1000000} (platform/linux/timer.c:87)
+15:16:17.974 [I] net_device_open: dev=net1 (net.c:69)
+15:16:17.974 [I] ether_tap_open: dev=net1, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:109)
+15:16:17.974 [I] net_device_open: dev=net0 (net.c:69)
+15:16:17.974 [I] net_run: success (net.c:308)
+15:16:17.974 [D] app_main: press Ctrl+C to terminate (test/test.c:99)
+15:16:17.974 [D] icmp_output: 192.0.2.2 => 192.0.2.1, len=12 (icmp.c:155)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x4077
+	id: 4078
+	seq: 1
+15:16:17.974 [D] ip_output: 192.0.2.2 => 192.0.2.1, protocol=1, len=12 (ip.c:325)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 45835
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x84cd
+	  src: 192.0.2.2
+	  dst: 192.0.2.1
+15:16:17.974 [D] ip_output_device: dev=net1, len=32, target=192.0.2.1 (ip.c:269)
+15:16:17.974 [D] arp_resolve: cache not found, pa=192.0.2.1 (arp.c:292)
+15:16:17.974 [D] arp_request: dev=net1, len=28 (arp.c:205)
+	hrd: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	op: 1 (Request)
+	sha: 00:00:5e:00:53:01
+	spa: 192.0.2.2
+	tha: 00:00:00:00:00:00
+	tpa: 192.0.2.1
+15:16:17.974 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:105)
+15:16:17.974 [D] ether_tap_output: dev=net1, type=0x0806, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+15:16:17.978 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:16:18.825 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:16:18.975 [D] icmp_output: 192.0.2.2 => 192.0.2.1, len=12 (icmp.c:155)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x4076
+	id: 4078
+	seq: 2
+15:16:18.975 [D] ip_output: 192.0.2.2 => 192.0.2.1, protocol=1, len=12 (ip.c:325)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 47841
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x7cf7
+	  src: 192.0.2.2
+	  dst: 192.0.2.1
+15:16:18.975 [D] ip_output_device: dev=net1, len=32, target=192.0.2.1 (ip.c:269)
+15:16:18.975 [D] arp_request: dev=net1, len=28 (arp.c:205)
+	hrd: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	op: 1 (Request)
+	sha: 00:00:5e:00:53:01
+	spa: 192.0.2.2
+	tha: 00:00:00:00:00:00
+	tpa: 192.0.2.1
+15:16:18.975 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:105)
+15:16:18.975 [D] ether_tap_output: dev=net1, type=0x0806, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+15:16:18.975 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:16:18.975 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0806
+15:16:18.975 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:235)
+15:16:18.975 [D] net_protocol_queue_push: success, proto=0x0806 queue.num=1 (net.c:224)
+15:16:18.975 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+15:16:18.975 [D] net_protocol_queue_pop: success, proto=0x0806 queue.num=0 (net.c:201)
+15:16:18.975 [D] arp_input: dev=net1, len=28 (arp.c:250)
+	hrd: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	op: 2 (Reply)
+	sha: 76:a7:3d:a5:47:aa
+	spa: 192.0.2.1
+	tha: 00:00:5e:00:53:01
+	tpa: 192.0.2.2
+15:16:18.975 [D] arp_cache_update: UPDATE: pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:165)
+15:16:19.975 [D] icmp_output: 192.0.2.2 => 192.0.2.1, len=12 (icmp.c:155)
+	type: 8 (Echo)
+	code: 0
+	 sum: 0x4075
+	id: 4078
+	seq: 3
+15:16:19.975 [D] ip_output: 192.0.2.2 => 192.0.2.1, protocol=1, len=12 (ip.c:325)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 247
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 255
+    protocol: 1
+	  sum: 0x36e2
+	  src: 192.0.2.2
+	  dst: 192.0.2.1
+15:16:19.975 [D] ip_output_device: dev=net1, len=32, target=192.0.2.1 (ip.c:269)
+15:16:19.975 [D] arp_resolve: resolved, pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:310)
+15:16:19.975 [D] net_device_output: dev=net1, type=0x0800, len=32 (net.c:105)
+15:16:19.975 [D] ether_tap_output: dev=net1, type=0x0800, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: 76:a7:3d:a5:47:aa
+	type: 0x0800
+15:16:19.975 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+15:16:19.975 [D] ether_tap_input: dev=net1, type=0x0800, len=46 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0800
+15:16:19.975 [D] net_input: dev=net1, type=0x0800, len=32 (net.c:235)
+15:16:19.975 [D] net_protocol_queue_push: success, proto=0x0800 queue.num=1 (net.c:224)
+15:16:19.975 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+15:16:19.975 [D] net_protocol_queue_pop: success, proto=0x0800 queue.num=0 (net.c:201)
+15:16:19.975 [D] ip_input: dev=net1, len=32 (ip.c:202)
+15:16:19.975 [D] ip_input: permit, dev=net1, iface=192.0.2.2 (ip.c:243)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 32 (payload: 12)
+	   id: 34188
+      offset: 0x0000 [flags=0, offset=0]
+	  ttl: 64
+    protocol: 1
+	  sum: 0x714d
+	  src: 192.0.2.1
+	  dst: 192.0.2.2
+15:16:19.975 [D] icmp_input: 192.0.2.1 => 192.0.2.2, len=12 (icmp.c:115)
+	type: 0 (EchoReply)
+	code: 0
+	 sum: 0x4875
+	id: 4078
+	seq: 3
+15:16:20.301 [D] app_main: terminate (test/test.c:108)
+15:16:20.301 [I] cleanup: cleanup protocol stack... (test/test.c:80)
+15:16:20.301 [I] net_shutdown: shutting down... (net.c:317)
+15:16:20.301 [I] intr_main: terminated (platform/linux/intr.c:96)
+15:16:20.301 [I] net_device_close: dev=net1 (net.c:87)
+15:16:20.301 [I] ether_tap_close: dev=net1 (platform/linux/driver/ether_tap.c:116)
+15:16:20.302 [I] net_device_close: dev=net0 (net.c:87)
+15:16:20.302 [I] net_shutdown: success (net.c:324)
+```
+### 感想
+- ルータはルーティングテーブルを見て次に渡すべきノード(ネクストホップ)に対してパケットの受け渡しを繰り返して
+  最終的に宛先ノードへ届けるということが理解できた
+- ロンゲストマッチの原則によって、ネットワーク部が最も長い(大抵ルートテーブルの中の経路で宛先ノードに一番近くなる)ルータに受け渡せることがわかった
+- バイト同士を比較するときと数の大小を比較するときではエンディアンをホストエンディアンに変える必要があるかどうか
+  変わってしまうので注意したい
+
 ## step 15 2026-06-08 
 ### 今回やったこと(概要)
 - 受信パケットの遅延処理(p275)
