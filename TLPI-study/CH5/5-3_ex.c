@@ -37,25 +37,12 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "バイト数は正の数にしてください\n");
 		return 1;
 	}
-
-	int fd;
-	/* アトミックなファイルオープン処理 */
-	if (argc == ATOMIC) {
-		/* ファイルオープン */
-		fd = open(argv[1], O_CREAT | O_APPEND | O_WRONLY, 0644);
-		if (fd == -1) {
-			fprintf(stderr, "open()失敗: %s\n", strerror(errno));
-			return 1;
-		}
-	}
-	/* 非アトミックなファイルオープン処理 */
-	else if (argc == NON_ATOMIC) {
-		/* ファイルオープン */
-		fd = open(argv[1], O_CREAT | O_WRONLY, 0644);
-		if (fd == -1) {
-			fprintf(stderr, "open()失敗: %s\n", strerror(errno));
-			return 1;
-		}
+	/* アトミック・非アトミックの分岐はフラグを先に設定する */
+	int flags = O_CREAT | O_WRONLY | (argc == ATOMIC ? O_APPEND:0);
+	int fd = open(argv[1], flags, 0644);
+	if (fd == -1) {
+		fprintf(stderr, "open()失敗: %s\n", strerror(errno));
+		return 1;
 	}
 	/* 書き込み */
 	char buf[] = {'1'};
@@ -79,14 +66,55 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 	}
-		/* 終了処理 */
+	/* 終了処理 */
 	if (argc == ATOMIC) {
 		printf("アトミックな書き込みが完了しました\n");
 	}
 	else if (argc == NON_ATOMIC) {
 		printf("非アトミックな書き込みが完了しました\n");
 	}
-	/* 終了処理 */
 	close(fd);
 	return 0;
 }
+
+/*
+ * 実行結果
+ * $ ./5-3.out test_5-3_atomic.txt 10000 & ./5-3.out test_5-3_atomic.txt 10000
+ * [1] 9885
+ * アトミックな書き込みが完了しました
+ * アトミックな書き込みが完了しました
+ * [1]+  終了                     ./5-3.out test_5-3_atomic.txt 10000
+ * $ ./5-3.out test_5-3_non-atomic.txt 10000 x & ./5-3.out test_5-3_non-atomic.txt 10000 x
+ * [1] 9900
+ * 非アトミックな書き込みが完了しました
+ * 非アトミックな書き込みが完了しました
+ * [1]+  終了                     ./5-3.out test_5-3_non-atomic.txt 10000 x
+ * $ ls -l test_5-3_*
+ * -rw-r--r--. 1 ka2601 ka2601 20000  6月 10 16:22 test_5-3_atomic.txt
+ * -rw-r--r--. 1 ka2601 ka2601 20000  6月 10 16:22 test_5-3_non-atomic.txt
+ *
+ *  10000回の試行だと予想と違いアトミックでも非アトミックでも同じ結果になった。
+ *  試行回数を100倍に増やしてもう一度実験した。
+ *
+ *  $ ./5-3.out test_5-3_atomic.txt 1000000 & ./5-3.out test_5-3_atomic.txt 1000000
+ * [1] 10317
+ * アトミックな書き込みが完了しました
+ * アトミックな書き込みが完了しました
+ * [1]+  終了                     ./5-3.out test_5-3_atomic.txt 1000000
+ * $ ./5-3.out test_5-3_non-atomic.txt 1000000 x & ./5-3.out test_5-3_non-atomic.txt 1000000 x
+ * [1] 10332
+ * 非アトミックな書き込みが完了しました
+ * 非アトミックな書き込みが完了しました
+ * [1]+  終了                     ./5-3.out test_5-3_non-atomic.txt 1000000 x
+ * 
+ *  実行後のファイルを確認すると以下のようになった。
+ *  $ ls -l test_5-3_*
+ * -rw-r--r--. 1 ka2601 ka2601 2000000  6月 10 16:30 test_5-3_atomic.txt
+ * -rw-r--r--. 1 ka2601 ka2601 1156666  6月 10 16:31 test_5-3_non-atomic.txt
+ *
+ *  100万回の試行だと非アトミックな書き込みを使ったとき複数プロセスがお互いの書いた内容を上書きしてしまうとわかった。
+ *  (オープンファイルテーブルのファイルオフセットはプロセスごとに固有の領域を参照している(p102参照)ので、ファイルオフセットの
+ *  更新タイミングによって(lseek()とwrite()の間に別プロセスがlseek()をした場合)各プロセスが同じところに書き込んでしまう)
+ *  O_APPENDフラグを使えばファイルオフセットの移動と書き込みがアトミックに行われる(間に他のプロセスが入らない)ので確実に末尾に追記できる。
+ */
+
