@@ -20,6 +20,209 @@
 - 書籍を読みながらTCP/IPプロトコルスタックを完成させる
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
+## step 17 2026-06-15 
+### 今回やったこと(概要)
+- UDPの基礎
+- UDPデータグラムの入力と検証
+
+### 学べたこと(具体的な内容)
+- UDPの基礎
+  - UDPはTCPと同様のトランスポート層のプロトコル
+    - アプリケーションプロセス間でデータを受け渡すのに利用される
+  - UDPはシンプルにアプリケーションにIPの機能を提供するだけで、データが届いたかなどは検証してくれない
+    - 信頼性についてはアプリケーション層で対処する必要がある
+  - UDPのデータ送信の単位はデータグラム
+    - アプリケーションから一回の送信で送られたデータは一つのデータグラムとして扱われる
+    - 途中でパケットが消失したり問題が発生した場合でもアプリケーション層が対処する必要があり、信頼性に乏しい
+      - プロトコル処理が軽いので高速というメリットがある
+      - 動画配信などに使われることが多い
+- UDPのデータ構造
+  - 送信元ポート(2byte)
+    - 応答が送られるポート、使わない場合は0を設定することが可能
+  - 宛先ポート(2byte)
+  - 長さ(2byte)
+    - UDPデータグラム全体の長さ
+  - チェックサム(2byte)
+    - 0を設定してチェックサム計算の省略が可能
+      - 送信時にチェックサムの計算結果が0の場合は0xFFFFと設定しておく
+  - データ(可変長)
+- UDPの疑似ヘッダ
+  - UDPはチェックサムを計算するときに実際には存在しない疑似ヘッダを使う
+    - IPパケットにカプセル化されて配送される過程で間違った宛先に転送されないようにするため
+
+- UDPデータグラムの詳細出力 (p316)
+  - UDPデータグラムの詳細を出力する(udp_print())(省略)
+
+- UDPデータグラムの入力と検証(p321)
+
+```c
+static void
+udp_input(const struct ip_hdr *iphdr, const uint8_t *data, size_t len, struct ip_iface *iface)
+{
+	struct udp_hdr *hdr;
+	uint16_t total;
+    /* 疑似ヘッダ */
+	struct pseudo_hdr pseudo;
+	uint16_t psum = 0;
+	ip_endp_t src, dst;
+	char endp1[IP_ENDP_STR_LEN];
+	char endp2[IP_ENDP_STR_LEN];
+    
+    /* ヘッダよりも処理するデータが短いならエラー(dataを越えて読み込まないように) */ 
+	if (len < sizeof(*hdr)) {
+		errorf("too short");
+		return;
+	}
+	hdr = (struct udp_hdr *)data;
+    /* データグラムの長さの検証 */
+	total = ntoh16(hdr->len);
+	if (len < total) {
+		errorf("length error: len=%zu, hdr->len=%u", len, total);
+		return;
+	}
+    /* チェックサムが0でないなら */
+	if (hdr->sum) {
+        /* IPの情報から疑似ヘッダを組み立てる */
+		pseudo.src = iphdr->src;
+		pseudo.dst = iphdr->dst;
+		pseudo.zero = 0;
+		pseudo.protocol = IP_PROTOCOL_UDP;
+        /* UDPデータグラムの長さ(UDPヘッダの長さフィールドと同じ) */
+		pseudo.len = hton16(total);
+        /* 疑似ヘッダのチェックサム(部分和)を得る */
+        /* cksum16()は最後にチェックサムを求めるためにビット反転しているので~で戻す */
+		psum = ~cksum16((uint16_t *)&pseudo, sizeof(pseudo), 0);
+        /* チェックサム計算 */
+		if (cksum16((uint16_t *)hdr, len, psum) != 0) {
+			errorf("checksum error");
+			return;
+		}
+	}
+    /* IPアドレスとポートのセットを作る */
+	src.addr = iphdr->src;
+	src.port = hdr->src;
+	dst.addr = iphdr->dst;
+	dst.port = hdr->dst;
+	debugf("%s => %s, len=%zu, dev=%s",
+		ip_endp_ntop(src, endp1, sizeof(endp1)),
+		ip_endp_ntop(dst, endp2, sizeof(endp2)),
+		len, NET_IFACE(iface)->dev->name);
+	udp_print(data,len);
+}
+
+```
+- UDPモジュールの登録(udp_init(), net_init())(p323)
+  - UDPモジュールの入力ハンドラをIPモジュールに登録する(省略)
+
+- テストプログラムを変更して何もせず待ち続けるだけのコードにした(p324) 
+
+### 実行結果
+前回までと同様に準備した後、別端末から以下のコマンドを実行した。
+```bash
+$ nc -u 192.0.2.2 7
+```
+その後テストプログラムを実行して、別端末からテキストを送信した。
+```bash
+$ ./test/test.exe 2>&1 | tee -i step17.txt
+21:19:21.952 [I] setup: setup protocol stack... (test/test.c:37)
+21:19:21.952 [I] net_init: initialize... (net.c:275)
+21:19:21.952 [I] intr_register: success, irq=10 (platform/linux/intr.c:53)
+21:19:21.952 [I] intr_register: success, irq=14 (platform/linux/intr.c:53)
+21:19:21.952 [I] net_protocol_register: success, type=0x0806 (net.c:187)
+21:19:21.952 [I] timer_register: success, interval={1, 0} (platform/linux/timer.c:40)
+21:19:21.952 [I] net_protocol_register: success, type=0x0800 (net.c:187)
+21:19:21.952 [I] ip_protocol_register: success, protocol=1 (ip.c:290)
+21:19:21.952 [I] ip_protocol_register: success, protocol=17 (ip.c:290)  # UDP登録
+21:19:21.952 [I] net_init: success (net.c:296)
+21:19:21.952 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:63)
+21:19:21.952 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+21:19:21.952 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:237)
+21:19:21.952 [I] net_device_add_iface: success, dev=net0 (net.c:146)
+21:19:21.952 [I] ip_route_add: 127.0.0.0/255.0.0.0 dev net0 src 127.0.0.1 (ip.c:136)
+21:19:21.952 [I] ether_tap_init: name=tap0, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:206)
+21:19:21.952 [I] net_device_register: success, dev=net1, type=0x0002 (net.c:63)
+21:19:21.952 [I] intr_register: success, irq=35 (platform/linux/intr.c:53)
+21:19:21.952 [I] ether_tap_init: success, dev=net1, irq=35 (platform/linux/driver/ether_tap.c:243)
+21:19:21.952 [I] ip_iface_register: dev=net1, 192.0.2.2, 255.255.255.0, 192.0.2.255 (ip.c:237)
+21:19:21.952 [I] net_device_add_iface: success, dev=net1 (net.c:146)
+21:19:21.952 [I] ip_route_add: 192.0.2.0/255.255.255.0 dev net1 src 192.0.2.2 (ip.c:136)
+21:19:21.952 [I] ip_route_add: 0.0.0.0/0.0.0.0 via 192.0.2.1 dev net1 src 192.0.2.2 (ip.c:128)
+21:19:21.952 [I] net_run: startup... (net.c:305)
+21:19:21.952 [I] intr_main: start... (platform/linux/intr.c:69)
+21:19:21.954 [I] timer_run: interval={0, 1000000}, initial={0, 1000000} (platform/linux/timer.c:87)
+21:19:21.954 [I] net_device_open: dev=net1 (net.c:70)
+21:19:21.954 [I] ether_tap_open: dev=net1, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:109)
+21:19:21.954 [I] net_device_open: dev=net0 (net.c:70)
+21:19:21.954 [I] net_run: success (net.c:313)
+21:19:21.954 [D] app_main: press Ctrl+C to terminate (test/test.c:95)
+21:19:21.960 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+21:19:22.398 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+21:19:27.705 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+21:19:27.705 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+21:19:27.705 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:236)
+21:19:27.705 [D] net_protocol_queue_push: success, proto=0x0806 queue.num=1 (net.c:225)
+21:19:27.705 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+21:19:27.705 [D] net_protocol_queue_pop: success, proto=0x0806 queue.num=0 (net.c:202)
+21:19:27.705 [D] arp_input: dev=net1, len=28 (arp.c:250)
+	hrd: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	op: 1 (Request)
+	sha: 76:a7:3d:a5:47:aa
+	spa: 192.0.2.1
+	tha: 00:00:00:00:00:00
+	tpa: 192.0.2.2
+21:19:27.705 [D] arp_cache_update: cache not found (arp.c:159)
+21:19:27.705 [D] arp_cache_insert: INSERT: pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:186)
+21:19:27.705 [D] arp_reply: dev=net1, len=28 (arp.c:225)
+21:19:27.705 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:106)
+21:19:27.705 [D] ether_tap_output: dev=net1, type=0x0806, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: 76:a7:3d:a5:47:aa
+	type: 0x0806
+21:19:27.705 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+21:19:27.705 [D] ether_tap_input: dev=net1, type=0x0800, len=47 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0800
+21:19:27.705 [D] net_input: dev=net1, type=0x0800, len=33 (net.c:236)
+21:19:27.705 [D] net_protocol_queue_push: success, proto=0x0800 queue.num=1 (net.c:225)
+21:19:27.706 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+21:19:27.706 [D] net_protocol_queue_pop: success, proto=0x0800 queue.num=0 (net.c:202)
+21:19:27.706 [D] ip_input: dev=net1, len=33 (ip.c:336)
+21:19:27.706 [D] ip_input: permit, dev=net1, iface=192.0.2.2 (ip.c:377)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 33 (payload: 13)
+	   id: 53788
+      offset: 0x4000 [flags=2, offset=0]
+	  ttl: 64
+    protocol: 17
+	  sum: 0xe4ab
+	  src: 192.0.2.1
+	  dst: 192.0.2.2
+21:19:27.706 [D] udp_input: 192.0.2.1:49449 => 192.0.2.2:7, len=13, dev=net1 (udp.c:84)
+	src: 49449
+	dst: 7
+	len: 13 (payload: 5)
+	sum: 0xe0ca
+21:19:30.540 [D] app_main: terminate (test/test.c:99)
+21:19:30.540 [I] cleanup: cleanup protocol stack... (test/test.c:84)
+21:19:30.540 [I] net_shutdown: shutting down... (net.c:322)
+21:19:30.540 [I] intr_main: terminated (platform/linux/intr.c:96)
+21:19:30.541 [I] net_device_close: dev=net1 (net.c:88)
+21:19:30.541 [I] ether_tap_close: dev=net1 (platform/linux/driver/ether_tap.c:116)
+21:19:30.542 [I] net_device_close: dev=net0 (net.c:88)
+21:19:30.542 [I] net_shutdown: success (net.c:329)
+```
+### 感想
+- 疑似ヘッダが最初よく分からなかったが、送信・受信側の双方でIP層の情報から擬似ヘッダを作り
+  それをチェックサムに利用することで受信側が誤配送でないか確認するということがわかった。
+
 ## step 16 2026-06-10 
 ### 今回やったこと(概要)
 - ルーティング機能の追加(p291)
