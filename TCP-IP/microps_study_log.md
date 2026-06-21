@@ -20,6 +20,50 @@
 - 書籍を読みながらTCP/IPプロトコルスタックを完成させる
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
+## step 18 2026-06-21 
+### 今回やったこと(概要)
+- プロトコル制御ブロック
+- ユーザコマンド
+
+### 学べたこと(具体的な内容)
+- プロトコル制御ブロック
+  - トランスポート層の通信のための情報を扱う
+  - 使用するポートの情報や受信データを格納するキュー、バッファを管理
+  - アプリケーションが間接的にディスクリプタを使ってアクセスする
+
+- 制御ブロックの割当 (p332)
+
+```c
+
+struct udp_pcb {
+    int state;  /* 制御ブロックの状態(FREE,OPEN,CLOSING) */
+    ip_endp_t local;  /* ローカルエンドポイント、この通信で使うIPアドレスとポート番号 */
+    struct queue queue; /* receive queue */
+};
+
+/* 制御ブロックを割り当てる関数 */
+static struct udp_pcb *
+udp_pcb_alloc(void)
+{
+	struct udp_pcb *pcb;
+
+    /* 制御ブロックのリストを先頭から走査して、見つかったFREEの制御ブロックのポインタを返す */
+	for (pcb = pcbs; pcb < tailof(pcbs); pcb++) {
+		if (pcb->state == UDP_PCB_STATE_FREE) {
+			pcb->state = UDP_PCB_STATE_OPEN;
+			return pcb;
+		}
+	}
+	return NULL;
+}
+
+```
+
+
+### 実行結果
+
+### 感想
+
 ## step 17 2026-06-15 
 ### 今回やったこと(概要)
 - UDPの基礎
