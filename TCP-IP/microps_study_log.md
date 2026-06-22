@@ -59,6 +59,50 @@ udp_pcb_alloc(void)
 
 ```
 
+- 制御ブロックの解放  (p332)
+
+```c
+static void
+udp_pcb_release(struct udp_pcb *pcb)
+{
+	struct queue_entry *entry;
+
+    /* 解放状態に設定 */
+	pcb->state = UDP_PCB_STATE_FREE;
+    /* ローカルエンドポイントをリセット */
+	pcb->local.addr = IP_ADDR_ANY;
+	pcb->local.port = 0;
+	while (1) {  /* Discard the entries in the queue. */
+		entry = queue_pop(&pcb->queue);
+		if (!entry) {
+			break;
+		}
+		debugf("free queue entry");
+		memory_free(entry);
+	}
+}
+```
+- 制御ブロックの記述子 (p333)
+  - 通信はすべて制御ブロックを介して行われる
+  - Linuxなどで使うファイルディスクリプタのように記述子を使って制御ブロックにアクセスする
+  - 記述子はint型の整数値で、制御ブロックの配列pcbs[desc]のように使う
+
+- 制御ブロックの記述子をポインタへ変換する関数 (p334)
+
+```c
+static struct udp_pcb *
+udp_pcb_get(int desc)
+{
+	struct udp_pcb *pcb;
+    /* 記述子が0より小さいか配列の要素数を超えていたらエラー */
+	if (desc < 0 || countof(pcbs) <= (size_t)desc) {
+		/* out of range */
+		return NULL;
+    }
+}
+
+```
+  
 
 ### 実行結果
 
