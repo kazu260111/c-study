@@ -103,6 +103,107 @@ udp_pcb_get(int desc)
 
 ```
   
+- 制御ブロックの検索  (p335)
+  - 指定条件にマッチする制御ブロックを検索する
+```c
+typedef struct {
+    ip_addr_t addr;
+    uint16_t port;
+} ip_endp_t;
+
+static struct udp_pcb *
+udp_pcb_select(ip_endp_t key)
+{
+	struct udp_pcb *pcb;
+    
+    /* リストの先頭から走査 */
+	for (pcb = pcbs; pcb < tailof(pcbs); pcb++) {
+		if (pcb->state == UDP_PCB_STATE_OPEN) {
+            /* 検索キーのポートと比較 */
+			if (pcb->local.port == key.port) {
+                /* IPアドレスが一致するかIP_ADDR_ANY(何でもよい)ならOK */
+				if (pcb->local.addr == key.addr ||
+				    pcb->local.addr == IP_ADDR_ANY ||
+				    key.addr == IP_ADDR_ANY)
+				{
+					return pcb;
+				}
+			}
+		}
+        /* 見つからなかったらNULLを返す */
+		return NULL;
+	}
+}
+
+```
+
+- 受信キューへのデータ格納  (p337)
+
+```c
+static void
+udp_input(const struct ip_hdr *iphdr, const uint8_t *data, size_t len, struct ip_iface *iface)
+{
+	struct udp_hdr *hdr;
+	uint16_t total;
+	struct pseudo_hdr pseudo;
+	uint16_t psum = 0;
+	ip_endp_t src, dst;
+	char endp1[IP_ENDP_STR_LEN];
+	char endp2[IP_ENDP_STR_LEN];
+	struct udp_pcb *pcb;
+	uint16_t iphdrlen;
+	struct udp_queue_entry *entry;
+    /* 省略 */
+	debugf("%s => %s, len=%zu, dev=%s",
+		ip_endp_ntop(src, endp1, sizeof(endp1)),
+		ip_endp_ntop(dst, endp2, sizeof(endp2)),
+		len, NET_IFACE(iface)->dev->name);
+	udp_print(data,len);
+    /* ロック */
+	lock_acquire(&lock);
+    /* 制御ブロックの検索 */
+	pcb = udp_pcb_select(dst);
+    /* 見つからなかったら */
+	if (!pcb) {
+		/* port is not in use */
+        /* ロック解除 */
+		lock_release(&lock);
+        /*
+         * ip_hdr->vhlの下位にあるヘッダ長4bitのみを取り出して、4bit左に動かす
+         * （このあと(uint8_t *)にキャストするのでビットを移動させておく)
+         */
+		iphdrlen = (iphdr->vhl & 0x0f) << 4
+        /* ICMPの送信 (Destination Unreachable) */
+		icmp_output(ICMP_TYPE_DEST_UNREACH, ICMP_CODE_PORT_UNREACH, 0,
+			(uint8_t *)iphdr, iphdrlen + 8, iface->unicast, iphdr->src);
+		return;
+	}
+    
+    /* 受信キューへの格納に必要なメモリを確保 */
+	entry = memory_alloc(sizeof(*entry) + (len - sizeof(*hdr)));
+	if (!entry) {
+		lock_release(&lock);
+		errorf("memory_alloc() failure");
+		return;
+	}
+    /* リモートエンドポイント(受信したデータクラムの送信元のエンドポイント) */
+	entry->remote = src;
+    /* データの長さ */
+	entry->len = len - sizeof(*hdr);
+    /* データのコピー */
+	memcpy(entry + 1, hdr + 1, entry->len);
+    /* キューにプッシュ */
+	if (!queue_push(&pcb->queue, (struct queue_entry *)entry)) {
+		lock_release(&lock);
+		errorf("queue_push() failure");
+		return;
+	}
+	debugf("queue_push: success, desc=%d, num=%d", udp_pcb_desc(pcb), pcb->queue.num);
+    /* ロック解除 */
+	lock_release(&lock);
+}
+
+```
 
 ### 実行結果
 
