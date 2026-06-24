@@ -94,13 +94,21 @@ static struct udp_pcb *
 udp_pcb_get(int desc)
 {
 	struct udp_pcb *pcb;
-    /* 記述子が0より小さいか配列の要素数を超えていたらエラー */
+    
+    /* 記述子がマイナスか制御ブロックよりも記述子が大きいならNULLを返す */
 	if (desc < 0 || countof(pcbs) <= (size_t)desc) {
 		/* out of range */
 		return NULL;
-    }
+	}
+    /* 制御ブロックの配列から該当制御ブロックのポインタを取り出す */
+	pcb = &pcbs[desc];
+    /* 制御ブロックがopenでないならNULLを返す */
+	if (pcb->state != UDP_PCB_STATE_OPEN) {
+		return NULL;
+	}
+    /* 変換した制御ブロックのポインタを返す */
+	return pcb;
 }
-
 ```
   
 - 制御ブロックの検索  (p335)
@@ -205,9 +213,282 @@ udp_input(const struct ip_hdr *iphdr, const uint8_t *data, size_t len, struct ip
 
 ```
 
-### 実行結果
+- ユーザコマンドの実装
+- OPENコマンド (p340)
+  - 制御ブロックを割り当てるコマンド
+```c
+int
+udp_cmd_open(void)
+{
+	struct udp_pcb *pcb;
+	int desc;
 
+    /* ロック */
+	lock_acquire(&lock);
+    /* メモリ確保 */
+	pcb = udp_pcb_alloc();
+	if (!pcb) {
+		errorf("udp_pcb_alloc() failure");
+		return -1;
+	}
+    
+    /* 制御ブロックの記述子を得る(配列のインデックス) */
+	desc = udp_pcb_desc(pcb);
+    /* ロック解除 */
+	lock_release(&lock);
+	debugf("desc=%d", desc);
+    /* 制御ブロックの記述子を返す */
+	return desc;
+}
+```
+
+- CLOSEコマンド (p340)
+  - 割り当てた制御ブロックを解放する
+```c
+int
+udp_cmd_close(int desc)
+{
+	struct udp_pcb *pcb;
+
+    /* ロック */
+	lock_acquire(&lock);
+    /* 記述子から制御ブロックのポインタを得る */
+	pcb = udp_pcb_get(desc);
+	if (!pcb) {
+		errorf("pcb not found, desc=%d", desc);
+		lock_release(&lock);
+		return -1;
+	}
+	debugf("desc=%d", desc);
+    /* 制御ブロックの解放 */
+	udp_pcb_release(pcb);
+    /* ロック解除 */
+	lock_release(&lock);
+	return 0;
+}
+
+```
+
+- BINDコマンド  (p341)
+  - 制御ブロックのローカルエンドポイントを設定する
+```c
+int
+udp_cmd_bind(int desc, ip_endp_t local)
+{
+	struct udp_pcb *pcb, *exist;
+	char endp1[IP_ENDP_STR_LEN];
+	char endp2[IP_ENDP_STR_LEN];
+
+    /* ロック */
+	lock_acquire(&lock);
+    /* 記述子からポインタを得る */
+	pcb = udp_pcb_get(desc);
+	if (!pcb) {
+		errorf("pcb not found, desc=%d", desc);
+		lock_release(&lock);
+		return -1;
+	}
+    /* 制御ブロックの検索 */
+	exist = udp_pcb_select(local);
+    /* すでに存在していたらエラー */
+	if (exist) {
+		errorf("already in use, desc=%d, want=%s, exist=%s",
+			desc, ip_endp_ntop(local, endp1, sizeof(endp1)),
+			ip_endp_ntop(exist->local, endp2, sizeof(endp2)));
+		lock_release(&lock);
+		return -1;
+	}
+	pcb->local = local;
+	debugf("desc=%d, %s",
+		desc, ip_endp_ntop(pcb->local, endp1, sizeof(endp1)));
+	/* ロック解除 */
+    lock_release(&lock);
+	return 0;
+}
+
+```
+
+- テストプログラムの変更  (p342)
+
+```c
+static int
+app_main(void)
+{
+	int desc;
+	ip_endp_t local;
+
+    /* 制御ブロックの記述子を得る */
+	desc = udp_cmd_open();
+	if (desc == -1) {
+		errorf("udp_open() failure");
+		return -1;
+	}
+    /* ローカルエンドポイントの設定 */
+	ip_endp_pton("192.0.2.2:7", &local);
+	if (udp_cmd_bind(desc, local) == -1) {
+		errorf("udp_bind() failure");
+		udp_cmd_close(desc);
+		return -1;
+	}
+	debugf("press Ctrl+C to terminate");
+	while (!terminate) {
+		sleep(1);
+	}
+	udp_cmd_close(desc);
+	debugf("terminate");
+       	return 0;
+}
+
+```
+
+### 実行結果
+前回までと同様にテストプログラムを実行する。
+その後、別端末で以下のコマンドを実行し、適当なテキストを入力してパケットを送信する。
+```bash
+# 別端末でテストプログラム実行後
+$ nc -u 192.0.2.2 7
+hoge
+fuga
+```
+テストプログラムの実行結果
+```bash
+# テストプログラム実行端末
+$ ./test/test.exe 2>&1 | tee -i step18.txt
+22:00:42.102 [I] setup: setup protocol stack... (test/test.c:38)
+22:00:42.102 [I] net_init: initialize... (net.c:275)
+22:00:42.103 [I] intr_register: success, irq=10 (platform/linux/intr.c:53)
+22:00:42.103 [I] intr_register: success, irq=14 (platform/linux/intr.c:53)
+22:00:42.103 [I] net_protocol_register: success, type=0x0806 (net.c:187)
+22:00:42.103 [I] timer_register: success, interval={1, 0} (platform/linux/timer.c:40)
+22:00:42.103 [I] net_protocol_register: success, type=0x0800 (net.c:187)
+22:00:42.103 [I] ip_protocol_register: success, protocol=1 (ip.c:290)
+22:00:42.103 [I] ip_protocol_register: success, protocol=17 (ip.c:290)
+22:00:42.103 [I] net_init: success (net.c:296)
+22:00:42.103 [I] net_device_register: success, dev=net0, type=0x0001 (net.c:63)
+22:00:42.103 [I] loopback_init: success, dev=net0 (driver/loopback.c:42)
+22:00:42.103 [I] ip_iface_register: dev=net0, 127.0.0.1, 255.0.0.0, 127.255.255.255 (ip.c:237)
+22:00:42.103 [I] net_device_add_iface: success, dev=net0 (net.c:146)
+22:00:42.103 [I] ip_route_add: 127.0.0.0/255.0.0.0 dev net0 src 127.0.0.1 (ip.c:136)
+22:00:42.103 [I] ether_tap_init: name=tap0, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:206)
+22:00:42.103 [I] net_device_register: success, dev=net1, type=0x0002 (net.c:63)
+22:00:42.103 [I] intr_register: success, irq=35 (platform/linux/intr.c:53)
+22:00:42.103 [I] ether_tap_init: success, dev=net1, irq=35 (platform/linux/driver/ether_tap.c:243)
+22:00:42.103 [I] ip_iface_register: dev=net1, 192.0.2.2, 255.255.255.0, 192.0.2.255 (ip.c:237)
+22:00:42.103 [I] net_device_add_iface: success, dev=net1 (net.c:146)
+22:00:42.103 [I] ip_route_add: 192.0.2.0/255.255.255.0 dev net1 src 192.0.2.2 (ip.c:136)
+22:00:42.103 [I] ip_route_add: 0.0.0.0/0.0.0.0 via 192.0.2.1 dev net1 src 192.0.2.2 (ip.c:128)
+22:00:42.103 [I] net_run: startup... (net.c:305)
+22:00:42.104 [I] intr_main: start... (platform/linux/intr.c:69)
+22:00:42.104 [I] timer_run: interval={0, 1000000}, initial={0, 1000000} (platform/linux/timer.c:87)
+22:00:42.104 [I] net_device_open: dev=net1 (net.c:70)
+22:00:42.105 [I] ether_tap_open: dev=net1, addr=00:00:5e:00:53:01 (platform/linux/driver/ether_tap.c:109)
+22:00:42.105 [I] net_device_open: dev=net0 (net.c:70)
+22:00:42.105 [I] net_run: success (net.c:313)
+22:00:42.105 [D] udp_cmd_open: desc=0 (udp.c:253)
+22:00:42.105 [D] udp_cmd_bind: desc=0, 192.0.2.2:7 (udp.c:298)
+22:00:42.105 [D] app_main: press Ctrl+C to terminate (test/test.c:110)
+22:00:42.117 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+22:00:42.312 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+22:00:48.921 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+22:00:48.921 [D] ether_tap_input: dev=net1, type=0x0806, len=42 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: ff:ff:ff:ff:ff:ff
+	type: 0x0806
+22:00:48.921 [D] net_input: dev=net1, type=0x0806, len=28 (net.c:236)
+22:00:48.921 [D] net_protocol_queue_push: success, proto=0x0806 queue.num=1 (net.c:225)
+22:00:48.921 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+22:00:48.921 [D] net_protocol_queue_pop: success, proto=0x0806 queue.num=0 (net.c:202)
+22:00:48.921 [D] arp_input: dev=net1, len=28 (arp.c:250)
+	hrd: 0x0001
+	pro: 0x0800
+	hln: 6
+	pln: 4
+	op: 1 (Request)
+	sha: 76:a7:3d:a5:47:aa
+	spa: 192.0.2.1
+	tha: 00:00:00:00:00:00
+	tpa: 192.0.2.2
+22:00:48.921 [D] arp_cache_update: cache not found (arp.c:159)
+22:00:48.921 [D] arp_cache_insert: INSERT: pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:186)
+22:00:48.921 [D] arp_reply: dev=net1, len=28 (arp.c:225)
+22:00:48.921 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:106)
+22:00:48.921 [D] ether_tap_output: dev=net1, type=0x0806, len=60 (platform/linux/driver/ether_tap.c:136)
+	src: 00:00:5e:00:53:01
+	dst: 76:a7:3d:a5:47:aa
+	type: 0x0806
+22:00:48.921 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+22:00:48.921 [D] ether_tap_input: dev=net1, type=0x0800, len=47 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0800
+22:00:48.921 [D] net_input: dev=net1, type=0x0800, len=33 (net.c:236)
+22:00:48.921 [D] net_protocol_queue_push: success, proto=0x0800 queue.num=1 (net.c:225)
+22:00:48.921 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+22:00:48.921 [D] net_protocol_queue_pop: success, proto=0x0800 queue.num=0 (net.c:202)
+22:00:48.921 [D] ip_input: dev=net1, len=33 (ip.c:336)
+22:00:48.921 [D] ip_input: permit, dev=net1, iface=192.0.2.2 (ip.c:377)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 33 (payload: 13)
+	   id: 61862
+      offset: 0x4000 [flags=2, offset=0]
+	  ttl: 64
+    protocol: 17
+	  sum: 0xc521
+	  src: 192.0.2.1
+	  dst: 192.0.2.2
+22:00:48.921 [D] udp_input: 192.0.2.1:41126 => 192.0.2.2:7, len=13, dev=net1 (udp.c:192)
+	src: 41126
+	dst: 7
+	len: 13 (payload: 5)
+	sum: 0x014e
+22:00:48.921 [D] udp_input: queue_push: success, desc=0, num=1 (udp.c:221)
+22:00:50.520 [D] intr_main: IRQ <35> occurred (platform/linux/intr.c:83)
+22:00:50.520 [D] ether_tap_input: dev=net1, type=0x0800, len=47 (platform/linux/driver/ether_tap.c:163)
+	src: 76:a7:3d:a5:47:aa
+	dst: 00:00:5e:00:53:01
+	type: 0x0800
+22:00:50.520 [D] net_input: dev=net1, type=0x0800, len=33 (net.c:236)
+22:00:50.520 [D] net_protocol_queue_push: success, proto=0x0800 queue.num=1 (net.c:225)
+22:00:50.520 [D] intr_main: IRQ <10> occurred (platform/linux/intr.c:83)
+22:00:50.520 [D] net_protocol_queue_pop: success, proto=0x0800 queue.num=0 (net.c:202)
+22:00:50.520 [D] ip_input: dev=net1, len=33 (ip.c:336)
+22:00:50.520 [D] ip_input: permit, dev=net1, iface=192.0.2.2 (ip.c:377)
+	  vhl: 0x45 [v: 4, hl: 5 (20)]
+	  tos: 0x00
+	total: 33 (payload: 13)
+	   id: 61863
+      offset: 0x4000 [flags=2, offset=0]
+	  ttl: 64
+    protocol: 17
+	  sum: 0xc520
+	  src: 192.0.2.1
+	  dst: 192.0.2.2
+22:00:50.520 [D] udp_input: 192.0.2.1:41126 => 192.0.2.2:7, len=13, dev=net1 (udp.c:192)
+	src: 41126
+	dst: 7
+	len: 13 (payload: 5)
+	sum: 0x034c
+22:00:50.520 [D] udp_input: queue_push: success, desc=0, num=2 (udp.c:221)
+# しばらく待機
+22:01:20.384 [D] arp_cache_delete: DELETE: pa=192.0.2.1, ha=76:a7:3d:a5:47:aa (arp.c:112)
+22:01:24.019 [D] udp_cmd_close: desc=0 (udp.c:269)
+22:01:24.019 [D] udp_pcb_release: free queue entry (udp.c:108)
+22:01:24.019 [D] udp_pcb_release: free queue entry (udp.c:108)
+22:01:24.019 [D] app_main: terminate (test/test.c:115)
+22:01:24.019 [I] cleanup: cleanup protocol stack... (test/test.c:85)
+22:01:24.019 [I] net_shutdown: shutting down... (net.c:322)
+22:01:24.019 [I] intr_main: terminated (platform/linux/intr.c:96)
+22:01:24.020 [I] net_device_close: dev=net1 (net.c:88)
+22:01:24.020 [I] ether_tap_close: dev=net1 (platform/linux/driver/ether_tap.c:116)
+22:01:24.020 [I] net_device_close: dev=net0 (net.c:88)
+22:01:24.020 [I] net_shutdown: success (net.c:329)
+```
 ### 感想
+- 普段勉強しているLinuxのファイルディスクリプタのように記述子を使えるので理解しやすかった。
+  - アプリケーションが記述子経由で制御ブロックにアクセスして直接のアクセスをしないことで
+    問題の切り分けもしやすく、udp_pcb_get()でチェックしてから記述子をポインタに変換するので
+    不正なポインタも渡されないようになっているとわかった。
 
 ## step 17 2026-06-15 
 ### 今回やったこと(概要)
