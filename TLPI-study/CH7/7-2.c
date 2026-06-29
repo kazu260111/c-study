@@ -102,19 +102,23 @@ void *my_malloc(size_t size) {
 	/*>>>>>> 大きめの領域があれば分割してリストをつなぎなおす <<<<<<*/
 	if (list_op) {
 		list = list_op;
-		/* 分割するには余りが16バイト必要 */
-		if (list->size - fix_size < 16) {
+		/* 分割するには余りが24バイト(ヘッダ、next、prevの分)必要 */
+		if (list->size - fix_size < 24) {
 		        /* 分割せずにそのまま使う */
 			return list_reconnect(list);
 		}
 		/*>>> 分割する場合 <<<*/
+		/* 選ばれた領域はリストから抜けるので前後をつなぎなおす */
+		list_reconnect(list);
+		/* 残される領域のsizeを計算 */
+		size_t rest_size = list->size - real_size;
 		/* 呼び出し元に渡す領域の設定 */
 		list->size = fix_size;
 		/* リストに残る領域を設定 */
 		struct free_list *rest_area;
 		rest_area = (struct free_list *)((char *)list + real_size);
-		rest_area->size = list_op->size - fix_size - 8;
-		/* 先頭につなぎなおす */
+		rest_area->size = rest_size;
+		/* 残った領域は先頭につなぎなおす */
 		rest_area->next = lists;
 		rest_area->prev = NULL;
 		if (lists) {
@@ -144,13 +148,18 @@ void *my_malloc(size_t size) {
 		}
 	}
 	/*>>>>>> 確保した領域を分割する <<<<<<*/
+	/*>>> 分割すると余る領域が少ない場合は全てそのまま利用する(リストに繋げない) <<<*/
+	if (up_size - real_size < 24) {
+		new_area->size = fix_size;
+		return &new_area->next;
+	}
 	/*>>> 分割して余っているリストに残す方をリストに登録する <<<*/
 	/* リストに追加する領域(余る領域)のポインタ */
 	struct free_list *new_list;
 	/* char *でキャストしないと進みすぎるので注意 */
 	new_list = (struct free_list *)((char *)new_area + real_size);
-	/* ヘッダのサイズ情報を記録 */
-	new_list->size = up_size - real_size;
+	/* ヘッダのサイズ情報を記録(上げたプログラムブレーク - 今回使った領域 - ヘッダサイズ)  */
+	new_list->size = up_size - real_size - 8;
 	/* リストの一番最初につなぐ */
 	new_list->next = lists;
 	new_list->prev = NULL;
@@ -159,15 +168,57 @@ void *my_malloc(size_t size) {
 	}
 	/* リスト先頭を更新 */
 	lists = new_list;
+	new_area->size = fix_size;
 	return &new_area->next;
 }
 
 void my_free(void *ptr) {
+	/* ptrがNULLなら何もしない */
+	if (!ptr) {
+		return;
+	}
+	/* 引数のポインタはnextの場所を指しているので、ヘッダのアドレスまで移動 */
+	struct free_list *list;
+	list = (struct free_list *)((char *)ptr - 8);
+	/* 空きリストの先頭に追加する */
+	list->next = lists;
+	list->prev = NULL;
+	if (lists) {
+		lists->prev = list;
+	}
+	lists = list;
+	return;
 }
 
 
 int main(void) {
+	void *a = my_malloc(100);
+	printf("ポインタa: %p\n", a);
+	void *b = my_malloc(200);
+	printf("ポインタb: %p\n", b);
+	my_free(a);
+	void *c = my_malloc(100);
+	/* aが再利用されるはず */
+	printf("ポインタc: %p\n", c);
+	my_free(b);
+	void *d = my_malloc(60);
+	void *e = my_malloc(60);
+	/* bが分割されて再利用されるはず */
+	printf("ポインタd: %p\n", d);
+	printf("ポインタe: %p\n", e);
+	my_free(d);
+	my_free(e);
+	return 0;
 }
 
 
-
+/* 実行結果
+ * $ ./7-2.out 
+ * ポインタa: 0x37467008
+ * ポインタb: 0x37467078
+ * ポインタc: 0x37467008  # aが再利用されている
+ * ポインタd: 0x37467078  # bの一部が再利用されている
+ * ポインタe: 0x374670c0  # bの一部が再利用されている
+ * 
+ * 8バイト境界でmalloc()とfree()が実装できた。
+ */
