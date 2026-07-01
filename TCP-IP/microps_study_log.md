@@ -20,6 +20,80 @@
 - 書籍を読みながらTCP/IPプロトコルスタックを完成させる
 - プログラム本体は[このリポジトリ](https://github.com/kazu260111/microps_fork_TCP-IP)にて作成中。
 
+## step 19 2026-06-29 
+### 今回やったこと(概要)
+- UDPのデータ送受信
+
+### 学べたこと(具体的な内容)
+- UDPのデータ送信
+  - ユーザはデータの到着待ちの時は受信コマンドで待機
+- UDPのデータ送信
+  - アプリケーションから記述子、宛先、データのバイト列と長さを受け取る
+  - 送信元アドレスとポートが未確定の時は自動的に選択してローカルエンドポイントを確定させる
+
+- RECVFROMコマンド (p353)
+```c
+ssize_t
+udp_cmd_recvfrom(int desc, uint8_t *buf, size_t size, ip_endp_t *remote)
+{
+	struct udp_pcb *pcb;
+	struct udp_queue_entry *entry;
+	ssize_t len;
+    
+	lock_acquire(&lock);
+    /* 記述子から制御ブロックを得る */
+	pcb = udp_pcb_get(desc);
+	if (!pcb) {
+		errorf("pcb not found, desc=%d", desc);
+		lock_release(&lock);
+		return -1;
+	}
+	while (1) {
+        /* キューにデータがあるならループ終了 */
+		entry = (struct udp_queue_entry *)queue_pop(&pcb->queue);
+		if (entry) {
+			debugf("queue_pop: success, desc=%d, num=%d", desc, pcb->queue.num);
+			break;
+		}
+		debugf("queue_pop: empty, desc=%d, sleep task...", desc);
+        /* 休止する */
+		if (sched_task_sleep(&pcb->task, &lock, NULL) == -1) {
+            /* 中断された場合-1が戻る */
+			debugf("interrupted");
+			lock_release(&lock);
+			errno = EINTR;
+			return -1;
+		}
+		debugf("task wakeup");
+        /* 状態が解放中に変化していたら終了する */
+		if (pcb->state == UDP_PCB_STATE_CLOSING) {
+			debugf("closed");
+			udp_pcb_release(pcb);
+			lock_release(&lock);
+			return -1;
+		}
+	}
+	lock_release(&lock);
+    /* 引数にリモートエンドポイントのバッファがあるなら書き込む */
+	if (remote) {
+		*remote = entry->remote;
+	}
+    /* 引数のbufと受信データの長さを比べて短い方に合わせる */
+	len = MIN(size, entry->len);  /* truncate */
+    /* entryの直後にあるデータをbufにコピー */
+	memcpy(buf, entry+1, len);
+	memory_free(entry);
+    /* 書き込んだ長さを返す */
+	return len;
+}
+
+```
+
+### 実行結果
+
+
+### 感想
+
 ## step 18 2026-06-21 
 ### 今回やったこと(概要)
 - プロトコル制御ブロック
